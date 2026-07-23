@@ -717,6 +717,7 @@
         <div class="admin-nav-group-label">Checkouts</div>
         <button class="admin-nav-btn" type="button" data-target="assignSupplies">Assign Supplies</button>
         <button class="admin-nav-btn" type="button" data-target="checkoutLog">Checkout Log</button>
+        <button class="admin-nav-btn" type="button" data-target="missingItems">Missing Items</button>
 
         <div class="admin-nav-group-label">Lab Settings</div>
         <button class="admin-nav-btn" type="button" data-target="labs">Labs</button>
@@ -834,6 +835,28 @@
             <div class="chip" data-logfilter="returned">returned</div>
           </div>
           <table id="logTable"><thead><tr><th>Who</th><th>Status</th><th></th></tr></thead><tbody></tbody></table>
+        </div>
+
+        <div class="admin-section" data-admin-section="missingItems">
+          <h2>Missing Items (<span id="missingCount">0</span>)</h2>
+          <div class="small-note" style="margin-bottom:14px;">
+            Everything currently flagged missing across every checkout in this lab — reported from a checkout's
+            item list in Checkout Log. "Found" clears the flag and leaves the item outstanding, still needing a
+            normal return. "Write Off" marks it returned and permanently reduces the item's on-hand quantity —
+            use it once it's genuinely not coming back.
+          </div>
+          <table id="missingTable">
+            <colgroup>
+              <col style="width:22%;">
+              <col style="width:90px;">
+              <col style="width:20%;">
+              <col style="width:16%;">
+              <col style="width:24%;">
+              <col style="width:180px;">
+            </colgroup>
+            <thead><tr><th>Item</th><th>Qty</th><th>Checked out by</th><th>Kit</th><th>Reported</th><th></th></tr></thead>
+            <tbody></tbody>
+          </table>
         </div>
 
         <div class="admin-section" data-admin-section="kits">
@@ -3103,8 +3126,12 @@ document.getElementById('assignKitLoadBtn').onclick = ()=>{
     if(room <= 0){ short.push(item.name); return; }
     const toAdd = Math.min(room, ref.qty);
     if(toAdd < ref.qty) short.push(item.name);
-    if(existing) existing.qty += toAdd;
-    else assignCart.push({itemId:item.id, name:item.name, qty:toAdd});
+    if(existing){
+      existing.qty += toAdd;
+      if(existing.kitId !== kit.id){ delete existing.kitId; delete existing.kitName; }
+    } else {
+      assignCart.push({itemId:item.id, name:item.name, qty:toAdd, kitId:kit.id, kitName:kit.name});
+    }
     addedCount++;
   });
   renderAssignLines();
@@ -3144,6 +3171,7 @@ document.getElementById('assignAddBtn').onclick = ()=>{
   const existing = assignCart.find(c=>c.itemId===item.id);
   if(existing){
     existing.qty = Math.min(avail, existing.qty + qty);
+    delete existing.kitId; delete existing.kitName;
   } else {
     assignCart.push({itemId:item.id, name:item.name, qty});
   }
@@ -3384,6 +3412,7 @@ document.getElementById('logSearch').addEventListener('input', (e)=>{
 function renderAdmin(){
   renderInvTable();
   renderLog();
+  renderMissingItems();
   renderAssignItemOptions();
   renderAssignKitSelect();
   renderKits();
@@ -3803,6 +3832,92 @@ function renderLog(){
   groups.forEach(g=> renderPersonRow(tbody, g));
 }
 
+/* ---------- ADMIN: Missing Items bucket ---------- */
+// Deliberately not its own backend endpoint - every item flagged missing is
+// already sitting right inside the same `checkouts` array Checkout Log
+// already loaded (and which the server already filtered by classification
+// clearance for this admin - see checkouts.mjs's visibleCheckouts), so this
+// is purely a client-side derivation over data already in hand, same
+// pattern as the person-grouped log itself.
+function renderMissingItems(){
+  const tbody = document.querySelector('#missingTable tbody');
+  tbody.innerHTML = "";
+  const rows = [];
+  checkouts.forEach(c=>{
+    c.items.forEach(it=>{
+      if(it.missing) rows.push({c, it});
+    });
+  });
+  document.getElementById('missingCount').textContent = rows.length;
+  if(rows.length === 0){
+    tbody.innerHTML = '<tr><td colspan="6" class="empty">Nothing reported missing right now.</td></tr>';
+    return;
+  }
+  rows.sort((a,b)=> new Date(b.it.missingAt || 0) - new Date(a.it.missingAt || 0));
+  rows.forEach(({c, it})=> tbody.appendChild(buildMissingRow(c, it)));
+}
+
+function buildMissingRow(c, it){
+  const tr = document.createElement('tr');
+  const reportedAt = it.missingAt ? new Date(it.missingAt).toLocaleString() : 'unknown';
+  tr.innerHTML = `
+    <td class="mono">${escapeAttr(it.name)}</td>
+    <td class="mono">${it.qty}</td>
+    <td>${escapeAttr(c.name)}<br><span class="mono" style="font-size:11px;color:var(--ink-soft);">${escapeAttr(c.email)}</span></td>
+    <td>${it.kitName ? escapeAttr(it.kitName) : '<span style="color:var(--ink-soft);">—</span>'}</td>
+    <td>
+      <span class="mono" style="font-size:11px;">${reportedAt}</span>
+      ${it.missingNote ? `<div class="small-note" style="margin-top:2px;">"${escapeAttr(it.missingNote)}"</div>` : ''}
+    </td>
+    <td></td>
+  `;
+  const actionTd = tr.lastElementChild;
+  actionTd.style.display = 'flex';
+  actionTd.style.gap = '6px';
+
+  const foundBtn = document.createElement('button');
+  foundBtn.className = 'btn btn-ghost';
+  foundBtn.textContent = 'Found';
+  foundBtn.onclick = async ()=>{
+    try{
+      checkouts = await apiWrite(checkoutsUrl(), 'PATCH', {id:c.id, action:'resolveMissing', itemIds:[it.itemId], resolution:'found'}, true);
+      reindexCheckouts();
+      renderMissingItems();
+      renderLog();
+      showToast(`"${it.name}" marked found`);
+    }catch(err){
+      handleAdminApiError(err);
+    }
+  };
+  actionTd.appendChild(foundBtn);
+
+  const writeOffBtn = document.createElement('button');
+  writeOffBtn.className = 'btn btn-ghost';
+  writeOffBtn.textContent = 'Write Off';
+  writeOffBtn.onclick = async ()=>{
+    const ok = await showModal({
+      title: 'Write off item',
+      msg: `Write off ${it.qty} × "${it.name}"? This marks it returned and permanently reduces this lab's on-hand quantity by ${it.qty} — use this once it's genuinely not coming back.`,
+      okText: 'Write Off',
+    });
+    if(!ok) return;
+    try{
+      checkouts = await apiWrite(checkoutsUrl(), 'PATCH', {id:c.id, action:'resolveMissing', itemIds:[it.itemId], resolution:'written-off'}, true);
+      reindexCheckouts();
+      renderMissingItems();
+      renderLog();
+      renderInvTable();
+      renderGrid();
+      showToast(`"${it.name}" written off`);
+    }catch(err){
+      handleAdminApiError(err);
+    }
+  };
+  actionTd.appendChild(writeOffBtn);
+
+  return tr;
+}
+
 // Kept deliberately spare - name/email/how-many-visits, a status badge, and
 // one prominent way in (History). Itemized contents and return dates used
 // to live here too, but with several checkouts rolled into one row that
@@ -3869,6 +3984,54 @@ function togglePersonDetail(personRow, g){
   anchor.after(trailRow);
 }
 
+// One item line within a checkout's detail row. A returned item is struck
+// through (unchanged); an already-missing one shows a plain ⚠ MISSING
+// indicator (resolving it - Found or Write Off - lives in the dedicated
+// Missing Items bucket, not duplicated here); anything still outstanding
+// gets a small "report missing" link. Whichever kit (if any) the item was
+// originally quick-added as part of is shown alongside it either way, since
+// that's exactly the context an admin needs when a field kit comes back
+// short.
+function buildTxnItemLine(c, it){
+  const line = document.createElement('div');
+  line.className = 'mono';
+  line.style.fontSize = '12px';
+  line.style.marginTop = '2px';
+  const kitTag = it.kitName
+    ? ` <span style="color:var(--ink-soft); font-size:10px;">(${escapeAttr(it.kitName)})</span>`
+    : '';
+  if(it.returned){
+    line.style.textDecoration = 'line-through';
+    line.style.color = 'var(--ink-soft)';
+    line.innerHTML = `${escapeAttr(it.name)} ×${it.qty}${kitTag}`;
+    return line;
+  }
+  if(it.missing){
+    line.innerHTML = `<span style="color:var(--red); font-weight:700;">⚠ MISSING</span> ${escapeAttr(it.name)} ×${it.qty}${kitTag}`;
+    return line;
+  }
+  line.innerHTML = `${escapeAttr(it.name)} ×${it.qty}${kitTag} <button type="button" class="link-btn report-missing-btn" style="font-size:10px;">report missing</button>`;
+  line.querySelector('.report-missing-btn').onclick = async ()=>{
+    const note = await showModal({
+      title: 'Report missing',
+      msg: `Report "${it.name}" from ${c.name}'s checkout as missing. Add any details you have (optional) - where it was last seen, etc.`,
+      multiline: true,
+      okText: 'Report Missing',
+    });
+    if(note === null) return;
+    try{
+      checkouts = await apiWrite(checkoutsUrl(), 'PATCH', {id:c.id, action:'reportMissing', itemIds:[it.itemId], note}, true);
+      reindexCheckouts();
+      renderLog();
+      renderMissingItems();
+      showToast(`Reported "${it.name}" missing`);
+    }catch(err){
+      handleAdminApiError(err);
+    }
+  };
+  return line;
+}
+
 // One person's individual checkout, rendered as a nested row inside their
 // expanded detail block - same fields and actions a top-level row used to
 // carry, just indented to make clear it belongs to the person above it.
@@ -3876,9 +4039,6 @@ function buildTxnRow(c){
   const s = statusOf(c);
   const tr = document.createElement('tr');
   tr.className = 'txn-row';
-  const itemsHtml = c.items.map(it=>
-    `<div class="mono" style="font-size:12px;${it.returned?'text-decoration:line-through;color:var(--ink-soft);':''}">${escapeAttr(it.name)} ×${it.qty}</div>`
-  ).join('');
   const badgeClass = s==='overdue'?'overdue':s==='returned'?'returned':s==='indef'?'indef':'active';
   const badgeText = s==='indef' ? 'indefinite' : s;
   const sourceTag = c.assignedByAdmin
@@ -3892,10 +4052,12 @@ function buildTxnRow(c){
   const checkedOutLine = `<span class="mono" style="font-size:11px;color:var(--ink-soft)">Checked out ${new Date(c.createdAt).toLocaleString()}</span>`;
   const returnLine = `<span class="mono" style="font-size:11px;color:var(--ink-soft)">${c.indefinite ? 'No return due' : (c.returnDate ? 'Due ' + c.returnDate : '')}</span>`;
   tr.innerHTML = `
-    <td>${checkedOutLine}<br>${returnLine}<br>${sourceTag} &middot; ${emailTag}<div style="margin-top:6px;">${itemsHtml}</div></td>
+    <td>${checkedOutLine}<br>${returnLine}<br>${sourceTag} &middot; ${emailTag}<div class="txn-items-wrap" style="margin-top:6px;"></div></td>
     <td><span class="badge ${badgeClass}">${badgeText}</span></td>
     <td></td>
   `;
+  const itemsWrap = tr.querySelector('.txn-items-wrap');
+  c.items.forEach(it=> itemsWrap.appendChild(buildTxnItemLine(c, it)));
   const actionTd = tr.lastElementChild;
   actionTd.style.display = 'flex';
   actionTd.style.flexDirection = 'column';
@@ -4069,6 +4231,8 @@ function describeHistoryEntry(e){
     case 'items-updated': return 'Items updated by ' + escapeAttr(e.by || 'admin');
     case 'returned-unrecorded': return 'Returned at some point' + itemsPart;
     case 'returned-backfilled': return 'Return date recorded' + (e.by ? ' (reported by ' + escapeAttr(e.by) + ')' : '') + itemsPart;
+    case 'reported-missing': return 'Reported missing by ' + escapeAttr(e.by || 'admin') + itemsPart + (e.note ? ` — "${escapeAttr(e.note)}"` : '');
+    case 'missing-resolved': return (e.resolution === 'written-off' ? 'Written off' : 'Found') + ' by ' + escapeAttr(e.by || 'admin') + itemsPart + (e.note ? ` — "${escapeAttr(e.note)}"` : '');
     default: return escapeAttr(e.action || 'Update');
   }
 }

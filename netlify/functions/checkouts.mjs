@@ -176,7 +176,20 @@ export default withErrorBoundary(async (req) => {
       if (!isNaN(parsed.getTime())) createdAt = parsed.toISOString();
     }
 
-    const items = body.items.map((it) => ({ itemId: it.itemId, name: it.name, qty: it.qty, returned: false }));
+    // A cart line optionally carries which kit it was quick-added from (see
+    // the shopper/assign-supplies UI) - captured here as a snapshot on the
+    // item line itself, same reasoning as capturing `name`: so a kit that's
+    // later renamed or deleted doesn't erase the context of what someone
+    // was actually issued, and so the missing-items log (see the
+    // reportMissing action below) can show "this was part of Field Repair
+    // Kit" without having to cross-reference the live kits list.
+    const items = body.items.map((it) => ({
+      itemId: it.itemId,
+      name: it.name,
+      qty: it.qty,
+      returned: false,
+      ...(typeof it.kitId === "string" && it.kitId ? { kitId: it.kitId, kitName: it.kitName || "" } : {}),
+    }));
     const actor = isAdminForLab && requester ? requester.username || requester.id : undefined;
     const record = {
       id: crypto.randomUUID(),
@@ -300,7 +313,11 @@ export default withErrorBoundary(async (req) => {
           const updatedItems = record.items.map((it) => {
             if (it.returned || (itemIds && !itemIds.includes(it.itemId))) return it;
             justReturned.push({ itemId: it.itemId, name: it.name, qty: it.qty });
-            return { ...it, returned: true, returnedAt: nowIso };
+            // If this item was flagged missing, it just showed back up -
+            // returned and missing can't both be true at once, so the flag
+            // (and its report details) drop the moment it's actually back.
+            const { missing, missingAt, missingNote, ...rest } = it;
+            return { ...rest, returned: true, returnedAt: nowIso };
           });
           const next = [...list];
           next[idx] = {
@@ -389,6 +406,137 @@ export default withErrorBoundary(async (req) => {
     // 401 = no valid session at all; 403 = valid session, wrong lab scope.
     if (!isAdminForLab) {
       return json({ error: requester ? "you don't have access to this lab" : "unauthorized" }, requester ? 403 : 401);
+    }
+
+    if (action === "reportMissing") {
+      // { id, itemIds?, note? } - itemIds omitted means every not-yet-
+      // returned, not-already-missing item on this checkout (same "omit
+      // means all" convention as returnItems/backfillReturnDate above).
+      // Admin-only for now: this is the "we noticed something's gone"
+      // report a lab manager files during a kit hand-off or audit, not a
+      // self-service action. `missing` is deliberately a separate flag from
+      // `returned`, not a replacement state: a missing item is still
+      // unavailable (availableQty/checkedOutQty key off `returned` alone,
+      // untouched by this), it just also needs someone to go find it.
+      const itemIds = Array.isArray(body.itemIds) && body.itemIds.length ? body.itemIds : null;
+      const note = typeof body.note === "string" ? body.note.trim() : "";
+      const actor = requester.username || requester.id;
+
+      const { value, errorResponse } = await runMutation(() =>
+        updateJSON(store, "checkouts", async (current) => {
+          const list = current || [];
+          const idx = list.findIndex((c) => c.id === id);
+          if (idx === -1) throw new ApiError("checkout not found", 404);
+          const record = list[idx];
+          const nowIso = new Date().toISOString();
+          const justReported = [];
+          const updatedItems = record.items.map((it) => {
+            if ((itemIds && !itemIds.includes(it.itemId)) || it.returned || it.missing) return it;
+            justReported.push({ itemId: it.itemId, name: it.name, qty: it.qty });
+            return { ...it, missing: true, missingAt: nowIso, missingNote: note };
+          });
+          if (justReported.length === 0) {
+            throw new ApiError("nothing here can be reported missing - it's already returned or already flagged", 400);
+          }
+          const next = [...list];
+          next[idx] = {
+            ...record,
+            items: updatedItems,
+            history: [
+              ...(record.history || []),
+              { at: nowIso, action: "reported-missing", by: actor, items: justReported, note },
+            ],
+          };
+          return next;
+        })
+      );
+      if (errorResponse) return errorResponse;
+      return json(await visibleCheckouts(value, requester, labId, store));
+    }
+
+    if (action === "resolveMissing") {
+      // { id, itemIds?, resolution: "found" | "written-off", note? }
+      // "found" just clears the flag - the item goes back to plain
+      // outstanding, still checked out, still needs a normal return.
+      // "written-off" additionally marks it returned (it's not coming back
+      // through this checkout) and permanently reduces the item's on-hand
+      // inventory qty by what was lost - see below for why that's a
+      // required write, not best-effort housekeeping.
+      if (body.resolution !== "found" && body.resolution !== "written-off") {
+        return json({ error: "resolution must be 'found' or 'written-off'" }, 400);
+      }
+      const writtenOff = body.resolution === "written-off";
+      const itemIds = Array.isArray(body.itemIds) && body.itemIds.length ? body.itemIds : null;
+      const note = typeof body.note === "string" ? body.note.trim() : "";
+      const actor = requester.username || requester.id;
+
+      // Populated by the mutator below on whichever attempt actually wins,
+      // so the inventory write after it reflects exactly what was resolved.
+      let writtenOffQtyByItem = [];
+
+      const { value, errorResponse } = await runMutation(() =>
+        updateJSON(store, "checkouts", async (current) => {
+          const list = current || [];
+          const idx = list.findIndex((c) => c.id === id);
+          if (idx === -1) throw new ApiError("checkout not found", 404);
+          const record = list[idx];
+          const nowIso = new Date().toISOString();
+          const resolved = [];
+          writtenOffQtyByItem = [];
+          const updatedItems = record.items.map((it) => {
+            if ((itemIds && !itemIds.includes(it.itemId)) || !it.missing) return it;
+            resolved.push({ itemId: it.itemId, name: it.name, qty: it.qty });
+            if (writtenOff) writtenOffQtyByItem.push({ itemId: it.itemId, qty: it.qty });
+            const { missingAt, missingNote, ...rest } = it;
+            return writtenOff ? { ...rest, missing: false, returned: true, returnedAt: nowIso } : { ...rest, missing: false };
+          });
+          if (resolved.length === 0) {
+            throw new ApiError("nothing here is currently marked missing", 400);
+          }
+          const next = [...list];
+          next[idx] = {
+            ...record,
+            items: updatedItems,
+            history: [
+              ...(record.history || []),
+              { at: nowIso, action: "missing-resolved", by: actor, resolution: body.resolution, items: resolved, note },
+            ],
+          };
+          return next;
+        })
+      );
+      if (errorResponse) return errorResponse;
+
+      if (writtenOff && writtenOffQtyByItem.length) {
+        // A written-off item is genuinely gone - silently swallowing a
+        // failure here (the way checkLowStockAndNotify does for its own
+        // best-effort housekeeping) would leave the lab's counted stock
+        // overstating what's really on the shelf, so this surfaces a
+        // conflict as a real error the admin can retry instead.
+        try {
+          await updateJSON(store, "inventory", async (invCurrent) => {
+            const inv = invCurrent || [];
+            return inv.map((i) => {
+              const lost = writtenOffQtyByItem.find((r) => r.itemId === i.id);
+              return lost ? { ...i, qty: Math.max(0, i.qty - lost.qty) } : i;
+            });
+          });
+        } catch (e) {
+          if (e instanceof ConcurrentWriteError) {
+            return json(
+              {
+                error:
+                  "marked returned and written off, but too much contention updating stock - please retry adjusting the item's quantity manually",
+              },
+              409
+            );
+          }
+          throw e;
+        }
+      }
+
+      await checkLowStockAndNotify(labId, labName, store);
+      return json(await visibleCheckouts(value, requester, labId, store));
     }
 
     if (action === "resendEmail") {
@@ -482,7 +630,9 @@ export default withErrorBoundary(async (req) => {
         const items = record.items.map((it) => {
           if (it.returned) return it;
           justReturned.push({ itemId: it.itemId, name: it.name, qty: it.qty });
-          return { ...it, returned: true, returnedAt: nowIso };
+          // Same "returned clears missing" rule as returnItems above.
+          const { missing, missingAt, missingNote, ...rest } = it;
+          return { ...rest, returned: true, returnedAt: nowIso };
         });
         const next = [...list];
         next[idx] = {
