@@ -314,6 +314,14 @@
   .admin-content{ flex:1; min-width:0; }
   .admin-section h2{ font-size:17px; font-weight:700; letter-spacing:-0.01em; margin-bottom:16px; display:flex; align-items:center; gap:8px; }
   .admin-grid-form{ display:grid; grid-template-columns:2fr 1fr 1fr auto; gap:10px; margin-bottom:14px; }
+  /* Grid items stretch to the row's full height by default - a button next
+     to an input/select ends up forced to that taller height (inputs carry
+     more padding plus a 1px border the button doesn't have), with its text
+     then centered in the extra space. That reads as the button having way
+     more padding than it actually declares. Matching the button's own
+     vertical padding to the input's (11px, same fix as .note-btn elsewhere)
+     closes that gap instead of just letting it get stretched. */
+  .admin-grid-form > .btn{ padding:11px 16px; white-space:nowrap; }
   table{ width:100%; border-collapse:collapse; font-size:13.5px; }
   /* table-layout:fixed + the <colgroup> on #invTable in the markup means
      every column's width is set explicitly once, instead of the browser
