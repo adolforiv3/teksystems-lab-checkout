@@ -200,6 +200,16 @@
   }
   .cart-line .cart-name{ flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .cart-line .rm{ background:none; border:none; color:var(--red); cursor:pointer; font-size:18px; line-height:1; flex-shrink:0; }
+  .cart-line-indented{ padding-left:16px; }
+  /* A real kit name is bold/dark like any other section header; the
+     catch-all "Other Items" bucket for anything not from a kit is styled
+     softer on purpose - it isn't a named group, just what's left over. */
+  .cart-kit-header{
+    padding:16px 0 4px; font-size:12px; font-weight:800; text-transform:uppercase;
+    letter-spacing:.05em; color:var(--ink);
+  }
+  .cart-kit-header:first-child{ padding-top:0; }
+  .cart-kit-header-other{ font-weight:600; color:var(--ink-soft); }
   .cart-qty{ display:flex; align-items:center; gap:6px; flex-shrink:0; }
   .qty-btn{
     width:28px; height:28px; padding:0; border:1px solid var(--border); background:var(--card);
@@ -1691,11 +1701,25 @@ function renderGrid(){
   }
 }
 
+// A cart line optionally carries {kitId, kitName} recording which kit it
+// was added as part of, purely so renderCart() can group the cart visually
+// (see task: "group by kit in case items are added outside of a kit").
+// Once a line is touched by any *other* source - a manual add-to-cart on
+// the same item, a scan, or a different kit that also references it - its
+// origin is no longer purely "from this one kit", so the tag is dropped and
+// it falls back into the ungrouped bucket rather than showing under a kit
+// header it doesn't fully belong to anymore.
+function untagKitOrigin(line){
+  delete line.kitId;
+  delete line.kitName;
+}
+
 function addToCart(item, qty){
   const existing = cart.find(c=>c.itemId===item.id);
   const avail = availableQty(item);
   if(existing){
     existing.qty = Math.min(avail, existing.qty + qty);
+    untagKitOrigin(existing);
   } else {
     cart.push({itemId:item.id, name:item.name, qty: Math.min(avail, qty)});
   }
@@ -1725,8 +1749,16 @@ function addKitToCart(kit){
     if(room <= 0){ short.push(item.name); return; }
     const toAdd = Math.min(room, ref.qty);
     if(toAdd < ref.qty) short.push(item.name);
-    if(existing) existing.qty += toAdd;
-    else cart.push({itemId:item.id, name:item.name, qty:toAdd});
+    if(existing){
+      existing.qty += toAdd;
+      // Only keep the group tag if this line already belonged to this exact
+      // kit (e.g. re-adding the same kit after removing an item by hand) -
+      // otherwise it was either a manual add or a different kit, so its
+      // origin is now mixed and it drops into "Other Items" instead.
+      if(existing.kitId !== kit.id) untagKitOrigin(existing);
+    } else {
+      cart.push({itemId:item.id, name:item.name, qty:toAdd, kitId:kit.id, kitName:kit.name});
+    }
     addedCount++;
   });
   renderCart();
@@ -1737,6 +1769,10 @@ function addKitToCart(kit){
   } else {
     showToast(`Added "${kit.name}" — short on ${short.join(', ')}`);
   }
+  // Callers that need to react to the outcome (the QR scanner's own
+  // persistent status line, distinct from the toast above) get a plain
+  // summary rather than having to re-derive it.
+  return { addedCount, short };
 }
 
 function renderKitCards(){
@@ -1795,6 +1831,34 @@ async function refreshAndReconcileCart(){
   return changed;
 }
 
+// Builds one cart row. `idx` is always the item's real position in the flat
+// `cart` array (never a position within a group) - the qty stepper and
+// remove button both mutate `cart` directly by that index, so grouping the
+// *display* below must never change what idx means.
+function buildCartLine(c, idx, indented){
+  const item = inventory.find(i=>i.id===c.itemId);
+  const avail = item ? availableQty(item) : c.qty;
+  const line = document.createElement('div');
+  line.className = 'cart-line' + (indented ? ' cart-line-indented' : '');
+  line.innerHTML = `
+    <span class="cart-name">${escapeAttr(c.name)}</span>
+    <div class="cart-qty">
+      <button class="qty-btn minus" type="button" ${c.qty<=1?'disabled':''}>−</button>
+      <input type="number" class="cart-qty-input mono" min="1" max="${avail}" value="${c.qty}">
+      <button class="qty-btn plus" type="button" ${c.qty>=avail?'disabled':''}>+</button>
+    </div>
+    <button class="rm">✕</button>
+  `;
+  line.querySelector('.minus').onclick = ()=> updateCartQty(idx, -1);
+  line.querySelector('.plus').onclick = ()=> updateCartQty(idx, 1);
+  line.querySelector('.cart-qty-input').addEventListener('change', (e)=>{
+    const v = parseInt(e.target.value);
+    setCartQty(idx, isNaN(v) ? c.qty : v);
+  });
+  line.querySelector('.rm').onclick = ()=>{ cart.splice(idx,1); renderCart(); };
+  return line;
+}
+
 function renderCart(){
   document.getElementById('cartCount').textContent = cart.reduce((s,c)=>s+c.qty,0);
   const wrap = document.getElementById('cartLines');
@@ -1803,29 +1867,41 @@ function renderCart(){
     return;
   }
   wrap.innerHTML = "";
-  cart.forEach((c,idx)=>{
-    const item = inventory.find(i=>i.id===c.itemId);
-    const avail = item ? availableQty(item) : c.qty;
-    const line = document.createElement('div');
-    line.className = 'cart-line';
-    line.innerHTML = `
-      <span class="cart-name">${c.name}</span>
-      <div class="cart-qty">
-        <button class="qty-btn minus" type="button" ${c.qty<=1?'disabled':''}>−</button>
-        <input type="number" class="cart-qty-input mono" min="1" max="${avail}" value="${c.qty}">
-        <button class="qty-btn plus" type="button" ${c.qty>=avail?'disabled':''}>+</button>
-      </div>
-      <button class="rm">✕</button>
-    `;
-    line.querySelector('.minus').onclick = ()=> updateCartQty(idx, -1);
-    line.querySelector('.plus').onclick = ()=> updateCartQty(idx, 1);
-    line.querySelector('.cart-qty-input').addEventListener('change', (e)=>{
-      const v = parseInt(e.target.value);
-      setCartQty(idx, isNaN(v) ? c.qty : v);
-    });
-    line.querySelector('.rm').onclick = ()=>{ cart.splice(idx,1); renderCart(); };
-    wrap.appendChild(line);
+
+  // Group by originating kit so a shopper who quick-added a kit and then
+  // kept browsing can tell at a glance what came bundled vs what they added
+  // themselves - groups appear in the order their kit was first added;
+  // anything with no kit origin (added individually, by scan, or demoted
+  // because it was later touched by a different source) falls into a final
+  // "Other Items" bucket instead of a fake group.
+  const kitGroups = new Map(); // kitId -> {kitName, lines:[{c,idx}]}
+  const ungrouped = [];
+  cart.forEach((c, idx)=>{
+    if(c.kitId){
+      if(!kitGroups.has(c.kitId)) kitGroups.set(c.kitId, {kitName:c.kitName || 'Kit', lines:[]});
+      kitGroups.get(c.kitId).lines.push({c, idx});
+    } else {
+      ungrouped.push({c, idx});
+    }
   });
+
+  kitGroups.forEach(group=>{
+    const header = document.createElement('div');
+    header.className = 'cart-kit-header';
+    header.textContent = group.kitName;
+    wrap.appendChild(header);
+    group.lines.forEach(({c, idx})=> wrap.appendChild(buildCartLine(c, idx, true)));
+  });
+
+  if(ungrouped.length){
+    if(kitGroups.size > 0){
+      const header = document.createElement('div');
+      header.className = 'cart-kit-header cart-kit-header-other';
+      header.textContent = 'Other Items';
+      wrap.appendChild(header);
+    }
+    ungrouped.forEach(({c, idx})=> wrap.appendChild(buildCartLine(c, idx, kitGroups.size > 0)));
+  }
 }
 
 function updateCartQty(idx, delta){
@@ -2102,7 +2178,7 @@ async function openScanner(){
       ()=>{ /* ignore per-frame no-scan noise */ }
     );
     scannerActive = true;
-    feedback.textContent = 'Point camera at an item QR label…';
+    feedback.textContent = 'Point camera at an item or kit QR label…';
   }catch(err){
     feedback.textContent = 'Camera access denied or unavailable on this device.';
   }
@@ -2128,10 +2204,32 @@ function onScanSuccess(decodedText){
   const now = Date.now();
   if(decodedText === lastScan.text && now - lastScan.at < 1500) return; // debounce repeat frames
   lastScan = { text: decodedText, at: now };
+  const feedback = document.getElementById('scanFeedback');
+
+  // A kit's printed label encodes LABKIT:<id> rather than LABITEM:<id> - see
+  // printKitQR() - so it reads exactly like scanning a single item, just
+  // resolved against `kits` instead of `inventory` and fanned out via
+  // addKitToCart() into every item the kit references.
+  if(decodedText.startsWith('LABKIT:')){
+    const kit = kits.find(k=>k.id === decodedText.slice(7));
+    if(!kit){
+      feedback.textContent = 'Unrecognized code — not a lab kit QR.';
+      return;
+    }
+    const { addedCount, short } = addKitToCart(kit);
+    if(addedCount === 0){
+      feedback.textContent = `"${kit.name}" — nothing available right now.`;
+      return;
+    }
+    flashScanCheck();
+    feedback.textContent = short.length
+      ? `✓ Added "${kit.name}" (short on ${short.join(', ')}) — keep scanning or tap Done.`
+      : `✓ Added "${kit.name}" — keep scanning or tap Done.`;
+    return;
+  }
 
   const id = decodedText.startsWith('LABITEM:') ? decodedText.slice(8) : decodedText;
   const item = inventory.find(i=>i.id === id);
-  const feedback = document.getElementById('scanFeedback');
   if(!item){
     feedback.textContent = 'Unrecognized code — not a lab item QR.';
     return;
@@ -2813,14 +2911,49 @@ function printItemQR(item){
   w.document.close();
 }
 
+// Same label format as printItemQR, just LABKIT: instead of LABITEM: - see
+// onScanSuccess for the matching read side. A kit's label deliberately
+// lists what's in it (resolved live from `inventory`, same as everywhere
+// else a kit's contents are displayed) so it's still identifiable once
+// printed and stuck to a bin, even though the kit itself carries no
+// serial/category of its own.
+function printKitQR(kit){
+  const qrUrl = 'https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=' +
+    encodeURIComponent('LABKIT:' + kit.id);
+  const w = window.open('', '_blank', 'width=360,height=480');
+  if(!w){ showToast('Allow pop-ups to print QR labels'); return; }
+  const itemsText = kit.items.map(ref=>{
+    const item = inventory.find(i=>i.id===ref.itemId);
+    return `${item ? item.name : 'unavailable item'} ×${ref.qty}`;
+  }).join(', ');
+  w.document.write(`
+    <html><head><title>${kit.name} — QR Label</title>
+    <style>
+      body{ font-family: sans-serif; text-align:center; padding:24px; }
+      img{ width:260px; height:260px; }
+      h2{ margin:14px 0 4px; font-size:18px; }
+      p{ color:#555; font-size:12px; }
+      button{ margin-top:16px; padding:8px 16px; font-size:14px; cursor:pointer; }
+      @media print { button{ display:none; } }
+    </style>
+    </head><body>
+      <img src="${qrUrl}" alt="QR code for ${kit.name}">
+      <h2>${kit.name}</h2>
+      <p>${itemsText}</p>
+      <button onclick="window.print()">Print label</button>
+    </body></html>
+  `);
+  w.document.close();
+}
+
 document.getElementById('printAllLabelsBtn').onclick = printAllLabels;
 
 function printAllLabels(){
-  if(inventory.length === 0){ showToast('No items to print labels for'); return; }
+  if(inventory.length === 0 && kits.length === 0){ showToast('No items to print labels for'); return; }
   const w = window.open('', '_blank', 'width=900,height=700');
   if(!w){ showToast('Allow pop-ups to print QR labels'); return; }
 
-  const cards = inventory.map(item=>{
+  const itemCards = inventory.map(item=>{
     const qrUrl = 'https://api.qrserver.com/v1/create-qr-code/?size=240x240&data=' +
       encodeURIComponent('LABITEM:' + item.id);
     return `
@@ -2831,6 +2964,23 @@ function printAllLabels(){
       </div>
     `;
   }).join('');
+
+  // Same label sheet, same card shape - a kit's QR just encodes LABKIT:
+  // instead of LABITEM: (see onScanSuccess), so it scans out exactly like
+  // any other label once printed and stuck on a bin. The "kit" tag in place
+  // of a category is what distinguishes it visually on the sheet.
+  const kitCards = kits.map(kit=>{
+    const qrUrl = 'https://api.qrserver.com/v1/create-qr-code/?size=240x240&data=' +
+      encodeURIComponent('LABKIT:' + kit.id);
+    return `
+      <div class="label-card">
+        <img src="${qrUrl}" alt="QR for ${kit.name}">
+        <div class="label-name">${kit.name}</div>
+        <div class="label-cat">kit</div>
+      </div>
+    `;
+  }).join('');
+  const cards = itemCards + kitCards;
 
   w.document.write(`
     <html><head><title>Item QR Labels</title>
@@ -2847,7 +2997,7 @@ function printAllLabels(){
     </style>
     </head><body>
       <div class="top-bar">
-        <h2>Item QR Labels (${inventory.length})</h2>
+        <h2>QR Labels (${inventory.length + kits.length})</h2>
         <button onclick="window.print()">Print all</button>
       </div>
       <div class="label-grid">${cards}</div>
@@ -3161,10 +3311,12 @@ function renderKitsList(){
         <div class="small-note" style="margin-top:2px; font-weight:400;">${escapeAttr(itemsText || 'no items')}</div>
       </span>
       <div class="lab-card-actions">
+        <button class="lab-icon-btn qr-kit-btn" type="button" title="Print QR label — scans just like an item">🔳</button>
         <button class="lab-icon-btn edit-kit-btn" type="button" title="Edit kit">✎</button>
         <button class="lab-icon-btn del-kit-btn" type="button" title="Delete kit">🗑</button>
       </div>
     `;
+    row.querySelector('.qr-kit-btn').onclick = ()=> printKitQR(kit);
     row.querySelector('.edit-kit-btn').onclick = ()=> startEditKit(kit);
     row.querySelector('.del-kit-btn').onclick = async ()=>{
       const ok = await showModal({title:'Delete kit', msg:`Delete "${kit.name}"? The items themselves aren't affected — only this shortcut.`, okText:'Delete'});
