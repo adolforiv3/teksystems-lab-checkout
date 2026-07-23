@@ -7,6 +7,7 @@ import {
   mutateLabs,
   resolveLab,
   labsVisibleTo,
+  labDirectory,
   publicLab,
   adminLab,
   slugify,
@@ -39,10 +40,18 @@ export default withErrorBoundary(async (req) => {
       return json(publicLab(lab));
     }
 
-    // No token: this is now an admin-management request, not a public
-    // listing. Anyone without a valid session gets nothing - not even an
-    // empty confirmation that the endpoint exists in a useful way.
     if (!admin) return json({ error: "unauthorized" }, 401);
+
+    if (url.searchParams.get("directory") === "1") {
+      // The minimal cross-company {id, name} listing - see labDirectory()
+      // for why this is intentionally not gated by canAccessLab the way
+      // everything else here is.
+      const labs = await loadLabsForRead(store);
+      return json(labDirectory(labs, admin));
+    }
+
+    // No token, no directory flag: this is an admin-management request, not
+    // a public listing.
     const labs = await loadLabsForRead(store);
     return json(labsVisibleTo(labs, admin).map(adminLab));
   }

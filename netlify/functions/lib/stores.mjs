@@ -28,3 +28,11 @@ export function labRegistryStore() {
 export function adminRegistryStore() {
   return getStore({ name: "admin-registry", consistency: "strong" });
 }
+// A transfer always spans two labs (source and destination), so it can't
+// live in either lab's own per-lab store the way inventory/checkouts do -
+// there'd be no single place to read "every transfer involving this lab"
+// without scanning every lab's store. Kept as one shared, company-wide
+// store instead, same pattern as the lab/admin registries above.
+export function transfersStore() {
+  return getStore({ name: "lab-transfers", consistency: "strong" });
+}

@@ -192,6 +192,26 @@ export function labsVisibleTo(labs, admin) {
   });
 }
 
+// A lightweight cross-company listing: every lab's {id, name}, nothing else
+// - no accessToken, no locked-passcode info, no inventory. Deliberately
+// available to ANY authenticated admin, not just one already scoped to that
+// specific lab (unlike labsVisibleTo above) - some cross-lab actions, like
+// initiating a transfer request with a lab you don't otherwise manage (see
+// transfers.mjs), need to know that lab exists before an admin has any
+// other relationship to it. Still respects lab-level classification: a lab
+// carrying its own classification tier stays entirely invisible - not even
+// its name - to an admin without clearance for it, same rule as
+// labsVisibleTo's superadmin branch.
+export function labDirectory(labs, admin) {
+  if (!admin) return [];
+  return labs
+    .filter((l) => {
+      const tier = l.classification || "standard";
+      return tier === "standard" || hasClearance(admin, l.id, tier);
+    })
+    .map((l) => ({ id: l.id, name: l.name }));
+}
+
 // Never expose the raw entry passcode - only whether one is set. Used for
 // the single-lab, token-resolved lookup that unauthenticated visitors hit;
 // deliberately minimal (no accessToken echoed back, no classification, no

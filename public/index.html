@@ -272,6 +272,12 @@
   }
   .admin-nav-btn:hover{ background:var(--card); color:var(--ink); box-shadow:var(--shadow-sm); }
   .admin-nav-btn.active{ background:var(--ink); color:var(--card); }
+  .nav-count-badge{
+    display:inline-flex; align-items:center; justify-content:center;
+    min-width:18px; height:18px; padding:0 5px; margin-left:6px;
+    background:var(--red); color:#fff; border-radius:var(--r-pill);
+    font-size:10.5px; font-weight:700;
+  }
   /* Sits at the very top of the sidebar, above every nav button, so which
      lab an admin is currently managing - and that it can be changed - is
      the first thing visible on every single admin page, not just something
@@ -743,6 +749,9 @@
         <button class="admin-nav-btn" type="button" data-target="checkoutLog">Checkout Log</button>
         <button class="admin-nav-btn" type="button" data-target="missingItems">Missing Items</button>
 
+        <div class="admin-nav-group-label">Transfers</div>
+        <button class="admin-nav-btn" type="button" data-target="transfers">Transfers<span id="transferActionCount" class="nav-count-badge" style="display:none;"></span></button>
+
         <div class="admin-nav-group-label">Lab Settings</div>
         <button class="admin-nav-btn" type="button" data-target="labs">Labs</button>
         <button class="admin-nav-btn" type="button" data-target="qrAccess">QR Access</button>
@@ -881,6 +890,55 @@
             <thead><tr><th>Item</th><th>Qty</th><th>Checked out by</th><th>Kit</th><th>Reported</th><th></th></tr></thead>
             <tbody></tbody>
           </table>
+        </div>
+
+        <div class="admin-section" data-admin-section="transfers">
+          <h2>Transfers<button class="btn btn-ghost" id="transfersRefreshBtn" type="button" style="margin-left:auto;">↻ Refresh</button></h2>
+          <div class="small-note" style="margin-bottom:14px;">
+            Move or borrow stock between labs. A transfer only ever leaves the lab that actually owns it once that
+            lab's own admin approves - sending to another lab still needs them to accept, and requesting from
+            another lab never lets you pull from their shelf directly: they choose exactly what (and how much) to
+            fulfill it with, or deny it.
+          </div>
+
+          <div class="chipbar" style="margin-bottom:12px;">
+            <div class="chip active" data-transferfilter="action">Needs Your Action</div>
+            <div class="chip" data-transferfilter="waiting">Awaiting Response</div>
+            <div class="chip" data-transferfilter="history">History</div>
+          </div>
+          <div id="transfersList" style="margin-bottom:22px;"></div>
+
+          <div class="small-note mono" style="margin-bottom:8px; text-transform:uppercase; letter-spacing:.05em;">New Transfer</div>
+          <div class="field"><label>With lab</label><select id="transferOtherLab" class="mono"></select></div>
+          <div class="chipbar" style="margin-bottom:14px;">
+            <div class="chip active" data-transferdir="send">Send to them</div>
+            <div class="chip" data-transferdir="request">Request from them</div>
+          </div>
+
+          <div id="transferSendBuilder">
+            <div class="admin-grid-form" style="grid-template-columns:2fr 1fr auto;">
+              <select id="transferSendItemSelect" class="mono"></select>
+              <input type="number" id="transferSendQty" min="1" value="1" class="mono" placeholder="Qty">
+              <button class="btn btn-teal" id="transferSendAddBtn" type="button">Add</button>
+            </div>
+            <div id="transferSendLines" style="margin-bottom:6px;"></div>
+          </div>
+
+          <div id="transferRequestBuilder" style="display:none;">
+            <div class="small-note" style="margin-bottom:10px;">
+              You won't see their inventory - name what you need and they'll match it against their own stock when
+              they review it.
+            </div>
+            <div class="admin-grid-form" style="grid-template-columns:2fr 1fr auto;">
+              <input type="text" id="transferReqName" placeholder="Item name" class="mono">
+              <input type="number" id="transferReqQty" min="1" value="1" class="mono" placeholder="Qty">
+              <button class="btn btn-teal" id="transferReqAddBtn" type="button">Add</button>
+            </div>
+            <div id="transferReqLines" style="margin-bottom:6px;"></div>
+          </div>
+
+          <div class="field"><label>Note (optional)</label><input type="text" id="transferNote" placeholder="What's this for?"></div>
+          <button class="btn btn-teal btn-full" id="transferSubmitBtn" type="button">Send Transfer Proposal</button>
         </div>
 
         <div class="admin-section" data-admin-section="kits">
@@ -2296,6 +2354,12 @@ let allLabs = [];
 let allAdmins = [];
 let editingAdminId = null;
 let companyInventory = [];   // superadmin-only aggregate: inventory rows tagged with labId/labName - see fetchCompanyInventorySafe()
+let transfers = [];          // every transfer visible to this admin, across every lab they manage - see transfers.mjs
+let labDirectory = [];       // {id,name}[] - every lab in the company, for picking a transfer counterparty (see labDirectory() server-side)
+let transferDirection = 'send';
+let transferSendCart = [];   // {itemId, name, qty} - built from the CURRENT lab's own inventory (the "New Transfer" builder always proposes relative to currentLab)
+let transferReqCart = [];    // {name, qty} - free-text, since a request never sees the other lab's real inventory
+let transferFilter = 'action';
 
 // Labs the CURRENT admin is allowed to see/manage - superadmins get
 // everything (except a lab that itself carries a classification tier they
@@ -2365,6 +2429,14 @@ async function enterAdminView(sectionToShow){
   const roleLabel = isSuper ? 'Superadmin' : 'Lab Admin';
   document.getElementById('adminUserInfo').innerHTML =
     `Signed in as<br><b>${escapeAttr(adminUser.username)}</b> · ${roleLabel}`;
+
+  // Transfers are for any lab admin, not just superadmins - fetched once
+  // per admin-view entry (both are global/company-wide, not tied to
+  // whichever lab happens to be currentLab) rather than on every lab
+  // switch; renderTransfers() re-runs on switch via renderAdmin() below to
+  // pick up currentLab's own inventory for the "New Transfer" builder.
+  transfers = await fetchTransfersSafe();
+  labDirectory = await fetchLabDirectorySafe();
 
   updateTopActionsVisibility();
   renderAdminLabList();
@@ -3417,6 +3489,404 @@ function renderKits(){
   renderKitsList();
 }
 
+/* ---------- ADMIN: lab-to-lab transfers ---------- */
+async function fetchTransfersSafe(){
+  try{ return await apiGet('/.netlify/functions/transfers'); }catch(e){ return []; }
+}
+async function fetchLabDirectorySafe(){
+  try{ return await apiGet('/.netlify/functions/labs?directory=1'); }catch(e){ return []; }
+}
+// Used only to build the fulfillment picker when accepting a "request" from
+// a lab that isn't necessarily currentLab - a one-off fetch, deliberately
+// not stored anywhere or mixed into the `inventory` global, which always
+// means "currentLab's inventory" everywhere else in this file.
+async function fetchLabInventorySafe(labId){
+  try{ return await apiGet('/.netlify/functions/inventory?lab=' + encodeURIComponent(labId)); }catch(e){ return []; }
+}
+
+function transferApproverLabId(t){ return t.direction === 'send' ? t.destinationLabId : t.sourceLabId; }
+function transferInitiatorLabId(t){ return t.direction === 'send' ? t.sourceLabId : t.destinationLabId; }
+function adminManagesLab(labId){ return visibleLabsForAdmin().some(l=>l.id===labId); }
+
+document.querySelectorAll('[data-transferdir]').forEach(chip=>{
+  chip.onclick = ()=>{
+    document.querySelectorAll('[data-transferdir]').forEach(c=>c.classList.remove('active'));
+    chip.classList.add('active');
+    transferDirection = chip.dataset.transferdir;
+    document.getElementById('transferSendBuilder').style.display = transferDirection==='send' ? 'block' : 'none';
+    document.getElementById('transferRequestBuilder').style.display = transferDirection==='request' ? 'block' : 'none';
+  };
+});
+
+document.querySelectorAll('[data-transferfilter]').forEach(chip=>{
+  chip.onclick = ()=>{
+    document.querySelectorAll('[data-transferfilter]').forEach(c=>c.classList.remove('active'));
+    chip.classList.add('active');
+    transferFilter = chip.dataset.transferfilter;
+    renderTransfersList();
+  };
+});
+
+document.getElementById('transfersRefreshBtn').onclick = async ()=>{
+  transfers = await fetchTransfersSafe();
+  renderTransfers();
+  showToast('Transfers refreshed');
+};
+
+// "New Transfer" is always relative to currentLab - a send proposes FROM
+// currentLab, a request proposes FROM the picked lab TO currentLab. This is
+// the one part of the feature that needs a concrete "my lab" anchor, unlike
+// the transfers list itself which spans every lab this admin manages.
+function renderTransferOtherLabSelect(){
+  const sel = document.getElementById('transferOtherLab');
+  const prev = sel.value;
+  sel.innerHTML = "";
+  const others = labDirectory.filter(l=>l.id !== currentLab.id);
+  if(others.length === 0){
+    sel.innerHTML = '<option value="">No other labs visible yet</option>';
+    return;
+  }
+  others.forEach(l=>{
+    const opt = document.createElement('option');
+    opt.value = l.id;
+    opt.textContent = l.name;
+    sel.appendChild(opt);
+  });
+  if(prev && others.some(l=>l.id===prev)) sel.value = prev;
+}
+
+function renderTransferSendItemSelect(){
+  const sel = document.getElementById('transferSendItemSelect');
+  const prev = sel.value;
+  sel.innerHTML = "";
+  if(inventory.length === 0){
+    sel.innerHTML = '<option value="">No inventory yet</option>';
+    return;
+  }
+  inventory.forEach(item=>{
+    const avail = availableQty(item);
+    const opt = document.createElement('option');
+    opt.value = item.id;
+    opt.textContent = `${item.name} (${avail} available)`;
+    if(avail === 0) opt.disabled = true;
+    sel.appendChild(opt);
+  });
+  if(prev && inventory.some(i=>i.id===prev)) sel.value = prev;
+}
+
+function renderTransferSendLines(){
+  const wrap = document.getElementById('transferSendLines');
+  if(transferSendCart.length === 0){
+    wrap.innerHTML = '<div class="empty" style="padding:10px 0;">No items added yet.</div>';
+    return;
+  }
+  wrap.innerHTML = "";
+  transferSendCart.forEach((c,idx)=>{
+    const line = document.createElement('div');
+    line.className = 'cart-line';
+    line.innerHTML = `<span class="cart-name">${escapeAttr(c.name)} <span class="mono" style="color:var(--ink-soft)">×${c.qty}</span></span><button class="rm">✕</button>`;
+    line.querySelector('.rm').onclick = ()=>{ transferSendCart.splice(idx,1); renderTransferSendLines(); };
+    wrap.appendChild(line);
+  });
+}
+
+document.getElementById('transferSendAddBtn').onclick = ()=>{
+  const sel = document.getElementById('transferSendItemSelect');
+  const itemId = sel.value;
+  const item = inventory.find(i=>i.id===itemId);
+  if(!item){ showToast('Pick an item first'); return; }
+  const avail = availableQty(item);
+  const qtyInput = document.getElementById('transferSendQty');
+  let qty = Math.max(1, parseInt(qtyInput.value) || 1);
+  if(avail <= 0){ showToast('Nothing available for that item'); return; }
+  if(qty > avail){ qty = avail; showToast(`Only ${avail} available — capped`); }
+  const existing = transferSendCart.find(c=>c.itemId===item.id);
+  if(existing) existing.qty = Math.min(avail, existing.qty + qty);
+  else transferSendCart.push({itemId:item.id, name:item.name, qty});
+  renderTransferSendLines();
+};
+
+function renderTransferReqLines(){
+  const wrap = document.getElementById('transferReqLines');
+  if(transferReqCart.length === 0){
+    wrap.innerHTML = '<div class="empty" style="padding:10px 0;">No items added yet.</div>';
+    return;
+  }
+  wrap.innerHTML = "";
+  transferReqCart.forEach((c,idx)=>{
+    const line = document.createElement('div');
+    line.className = 'cart-line';
+    line.innerHTML = `<span class="cart-name">${escapeAttr(c.name)} <span class="mono" style="color:var(--ink-soft)">×${c.qty}</span></span><button class="rm">✕</button>`;
+    line.querySelector('.rm').onclick = ()=>{ transferReqCart.splice(idx,1); renderTransferReqLines(); };
+    wrap.appendChild(line);
+  });
+}
+
+document.getElementById('transferReqAddBtn').onclick = ()=>{
+  const name = document.getElementById('transferReqName').value.trim();
+  const qtyInput = document.getElementById('transferReqQty');
+  const qty = Math.max(1, parseInt(qtyInput.value) || 1);
+  if(!name){ showToast('Enter an item name'); return; }
+  transferReqCart.push({name, qty});
+  document.getElementById('transferReqName').value = '';
+  document.getElementById('transferReqQty').value = '1';
+  renderTransferReqLines();
+};
+
+document.getElementById('transferSubmitBtn').onclick = async ()=>{
+  const otherLabId = document.getElementById('transferOtherLab').value;
+  if(!otherLabId){ showToast('Pick a lab first'); return; }
+  const note = document.getElementById('transferNote').value.trim();
+  const cart = transferDirection === 'send' ? transferSendCart : transferReqCart;
+  if(cart.length === 0){ showToast('Add at least one item'); return; }
+
+  const body = transferDirection === 'send'
+    ? { sourceLabId: currentLab.id, destinationLabId: otherLabId, direction: 'send', items: transferSendCart.map(c=>({itemId:c.itemId, qty:c.qty})), note }
+    : { sourceLabId: otherLabId, destinationLabId: currentLab.id, direction: 'request', items: transferReqCart.map(c=>({name:c.name, qty:c.qty})), note };
+
+  const btn = document.getElementById('transferSubmitBtn');
+  btn.disabled = true; btn.textContent = 'Sending…';
+  try{
+    transfers = await apiWrite('/.netlify/functions/transfers', 'POST', body, true);
+    transferSendCart = [];
+    transferReqCart = [];
+    document.getElementById('transferNote').value = '';
+    renderTransfers();
+    showToast(transferDirection === 'send' ? 'Transfer proposed' : 'Transfer requested');
+  }catch(e){
+    handleAdminApiError(e, 'Something went wrong proposing this transfer');
+  }
+  btn.disabled = false; btn.textContent = 'Send Transfer Proposal';
+};
+
+function transferStatusBadgeClass(status){
+  if(status === 'accepted') return 'returned';
+  if(status === 'denied') return 'overdue';
+  if(status === 'cancelled') return 'indef';
+  return 'active';
+}
+
+function describeTransferItems(items){
+  return (items||[]).map(it=> `${escapeAttr(it.name)} ×${it.qty}${it.redacted ? ' 🔒' : ''}`).join(', ') || 'no items';
+}
+
+// Only shown when accepting a "request" - the approving admin (always on
+// the source side here) picks real items from their own inventory to
+// fulfill each requested line, choosing exactly what and how much
+// (including partially, or skipping a line entirely). `sourceInventory` is
+// fetched fresh right before this is built - see fetchLabInventorySafe.
+function buildFulfillmentForm(t, sourceInventory){
+  const wrap = document.createElement('div');
+  wrap.style.cssText = 'border-top:1px solid var(--border); margin-top:8px; padding-top:10px; display:flex; flex-direction:column; gap:8px;';
+
+  const rows = t.items.map(reqIt=>{
+    const row = document.createElement('div');
+    row.style.cssText = 'display:flex; gap:8px; align-items:center;';
+
+    const label = document.createElement('span');
+    label.className = 'mono';
+    label.style.cssText = 'flex:1; font-size:12.5px; min-width:0;';
+    label.textContent = `${reqIt.name} ×${reqIt.qty} requested`;
+
+    const sel = document.createElement('select');
+    sel.className = 'mono';
+    sel.innerHTML = '<option value="">— skip —</option>' + sourceInventory.map(i=>
+      `<option value="${escapeAttr(i.id)}">${escapeAttr(i.name)} (${i.qty} on hand)</option>`
+    ).join('');
+    const guess = sourceInventory.find(i=>i.name.toLowerCase() === reqIt.name.toLowerCase());
+    if(guess) sel.value = guess.id;
+
+    const qtyInput = document.createElement('input');
+    qtyInput.type = 'number';
+    qtyInput.min = '1';
+    qtyInput.value = String(reqIt.qty);
+    qtyInput.className = 'mono';
+    qtyInput.style.width = '70px';
+
+    row.appendChild(label);
+    row.appendChild(sel);
+    row.appendChild(qtyInput);
+    row._sel = sel;
+    row._qty = qtyInput;
+    return row;
+  });
+  rows.forEach(r=>wrap.appendChild(r));
+
+  const submitBtn = document.createElement('button');
+  submitBtn.className = 'btn btn-teal btn-full';
+  submitBtn.type = 'button';
+  submitBtn.textContent = 'Confirm Fulfillment';
+  submitBtn.onclick = async ()=>{
+    const fulfillment = [];
+    rows.forEach(row=>{
+      if(!row._sel.value) return;
+      fulfillment.push({itemId: row._sel.value, qty: Math.max(1, parseInt(row._qty.value)||1)});
+    });
+    if(fulfillment.length === 0){ showToast('Pick at least one item to fulfill, or use Deny instead'); return; }
+    submitBtn.disabled = true; submitBtn.textContent = 'Sending…';
+    try{
+      transfers = await apiWrite('/.netlify/functions/transfers', 'PATCH', {id:t.id, action:'accept', fulfillment}, true);
+      renderTransfers();
+      await loadData();
+      renderInvTable();
+      renderGrid();
+      showToast('Transfer fulfilled');
+    }catch(err){
+      handleAdminApiError(err);
+      submitBtn.disabled = false; submitBtn.textContent = 'Confirm Fulfillment';
+    }
+  };
+  wrap.appendChild(submitBtn);
+  return wrap;
+}
+
+function buildTransferCard(t){
+  const card = document.createElement('div');
+  card.className = 'lab-row';
+  card.style.cssText = 'flex-direction:column; align-items:stretch; gap:8px;';
+
+  const dirLabel = t.direction === 'send'
+    ? `${escapeAttr(t.sourceLabName)} → ${escapeAttr(t.destinationLabName)}`
+    : `${escapeAttr(t.destinationLabName)} ← ${escapeAttr(t.sourceLabName)}`;
+  const kindLabel = t.direction === 'send' ? 'Send' : 'Request';
+  const statusLabel = t.status.charAt(0).toUpperCase() + t.status.slice(1);
+
+  card.innerHTML = `
+    <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:10px;">
+      <span class="lab-row-name">
+        ${dirLabel}
+        <div class="small-note" style="margin-top:2px; font-weight:400;">${kindLabel} · ${describeTransferItems(t.items)}</div>
+        ${t.note ? `<div class="small-note" style="margin-top:2px;">"${escapeAttr(t.note)}"</div>` : ''}
+        <div class="mono" style="font-size:11px; color:var(--ink-soft); margin-top:4px;">
+          Proposed by ${escapeAttr(t.requestedBy)} · ${new Date(t.requestedAt).toLocaleString()}
+          ${t.respondedBy ? `<br>${statusLabel} by ${escapeAttr(t.respondedBy)} · ${new Date(t.respondedAt).toLocaleString()}` : ''}
+        </div>
+        ${t.fulfilled ? `<div class="small-note" style="margin-top:4px;"><b>Fulfilled:</b> ${describeTransferItems(t.fulfilled)}</div>` : ''}
+      </span>
+      <span class="badge ${transferStatusBadgeClass(t.status)}">${t.status}</span>
+    </div>
+    <div class="transfer-actions" style="display:flex; gap:8px;"></div>
+    <div class="transfer-fulfill-wrap"></div>
+  `;
+
+  if(t.status === 'pending'){
+    const actionsWrap = card.querySelector('.transfer-actions');
+    const canApprove = adminManagesLab(transferApproverLabId(t));
+    const canCancel = !canApprove && adminManagesLab(transferInitiatorLabId(t));
+
+    if(canApprove){
+      const acceptBtn = document.createElement('button');
+      acceptBtn.className = 'btn btn-teal';
+      acceptBtn.type = 'button';
+      acceptBtn.textContent = t.direction === 'request' ? 'Fulfill…' : 'Accept';
+
+      if(t.direction === 'send'){
+        acceptBtn.onclick = async ()=>{
+          const ok = await showModal({title:'Accept transfer', msg:`Accept ${describeTransferItems(t.items)} from ${t.sourceLabName}? It'll be added to your lab's inventory.`, okText:'Accept'});
+          if(!ok) return;
+          acceptBtn.disabled = true; acceptBtn.textContent = 'Accepting…';
+          try{
+            transfers = await apiWrite('/.netlify/functions/transfers', 'PATCH', {id:t.id, action:'accept'}, true);
+            renderTransfers();
+            await loadData();
+            renderInvTable();
+            renderGrid();
+            showToast('Transfer accepted');
+          }catch(err){
+            handleAdminApiError(err);
+            acceptBtn.disabled = false; acceptBtn.textContent = 'Accept';
+          }
+        };
+      } else {
+        acceptBtn.onclick = async ()=>{
+          const fulfillWrap = card.querySelector('.transfer-fulfill-wrap');
+          if(fulfillWrap.childElementCount){ fulfillWrap.innerHTML = ''; return; } // toggle closed on a second click
+          fulfillWrap.innerHTML = '<div class="empty" style="padding:8px 0;">Loading your inventory…</div>';
+          const sourceInventory = await fetchLabInventorySafe(t.sourceLabId);
+          fulfillWrap.innerHTML = '';
+          fulfillWrap.appendChild(buildFulfillmentForm(t, sourceInventory));
+        };
+      }
+
+      const denyBtn = document.createElement('button');
+      denyBtn.className = 'btn btn-ghost';
+      denyBtn.type = 'button';
+      denyBtn.textContent = 'Deny';
+      denyBtn.onclick = async ()=>{
+        const reason = await showModal({title:'Deny transfer', msg:'Deny this transfer? An optional reason helps the other lab understand why.', multiline:true, okText:'Deny Transfer'});
+        if(reason === null) return;
+        try{
+          transfers = await apiWrite('/.netlify/functions/transfers', 'PATCH', {id:t.id, action:'deny', note:reason}, true);
+          renderTransfers();
+          showToast('Transfer denied');
+        }catch(err){
+          handleAdminApiError(err);
+        }
+      };
+
+      actionsWrap.appendChild(acceptBtn);
+      actionsWrap.appendChild(denyBtn);
+    } else if(canCancel){
+      const cancelBtn = document.createElement('button');
+      cancelBtn.className = 'btn btn-ghost';
+      cancelBtn.type = 'button';
+      cancelBtn.textContent = 'Cancel Proposal';
+      cancelBtn.onclick = async ()=>{
+        const ok = await showModal({title:'Cancel transfer', msg:'Withdraw this proposal? The other lab will no longer be able to act on it.', okText:'Cancel Transfer'});
+        if(!ok) return;
+        try{
+          transfers = await apiWrite('/.netlify/functions/transfers', 'PATCH', {id:t.id, action:'cancel'}, true);
+          renderTransfers();
+          showToast('Transfer cancelled');
+        }catch(err){
+          handleAdminApiError(err);
+        }
+      };
+      actionsWrap.appendChild(cancelBtn);
+    }
+  }
+
+  return card;
+}
+
+function updateTransferActionCount(){
+  const count = transfers.filter(t=> t.status==='pending' && adminManagesLab(transferApproverLabId(t))).length;
+  const badge = document.getElementById('transferActionCount');
+  if(count > 0){
+    badge.textContent = String(count);
+    badge.style.display = 'inline-flex';
+  } else {
+    badge.style.display = 'none';
+  }
+}
+
+function renderTransfersList(){
+  const wrap = document.getElementById('transfersList');
+  wrap.innerHTML = "";
+  let list;
+  if(transferFilter === 'action'){
+    list = transfers.filter(t=> t.status==='pending' && adminManagesLab(transferApproverLabId(t)));
+  } else if(transferFilter === 'waiting'){
+    list = transfers.filter(t=> t.status==='pending' && !adminManagesLab(transferApproverLabId(t)) && adminManagesLab(transferInitiatorLabId(t)));
+  } else {
+    list = transfers.filter(t=> t.status!=='pending');
+  }
+  if(list.length===0){
+    wrap.innerHTML = `<div class="empty">${transferFilter==='action' ? 'Nothing needs your action right now.' : transferFilter==='waiting' ? 'Nothing awaiting a response.' : 'No resolved transfers yet.'}</div>`;
+  } else {
+    list.forEach(t=> wrap.appendChild(buildTransferCard(t)));
+  }
+  updateTransferActionCount();
+}
+
+function renderTransfers(){
+  renderTransferOtherLabSelect();
+  renderTransferSendItemSelect();
+  renderTransferSendLines();
+  renderTransferReqLines();
+  renderTransfersList();
+}
+
 let logFilter = 'all';
 let logSearchTerm = '';
 document.querySelectorAll('[data-logfilter]').forEach(chip=>{
@@ -3440,6 +3910,7 @@ function renderAdmin(){
   renderAssignItemOptions();
   renderAssignKitSelect();
   renderKits();
+  renderTransfers();
 }
 
 /* ---------- Notes: history list + pencil-edit + add box ---------- */
