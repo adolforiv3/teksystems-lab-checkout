@@ -314,6 +314,18 @@
   .admin-content{ flex:1; min-width:0; }
   .admin-section h2{ font-size:17px; font-weight:700; letter-spacing:-0.01em; margin-bottom:16px; display:flex; align-items:center; gap:8px; }
   .admin-grid-form{ display:grid; grid-template-columns:2fr 1fr 1fr auto; gap:10px; margin-bottom:14px; }
+  /* A grid item's default min-width is `auto`, which for a form control
+     resolves to its own intrinsic content width, not 0 - so an <input> or
+     <select> refuses to shrink below that floor no matter what the fr
+     column asks for. With five columns (name/category/qty/classification/
+     button) each input hitting its own ~200px floor, the row's real total
+     width blew straight past the card's available space, and since
+     .admin-grid-form has no explicit width of its own, the overflow wasn't
+     absorbed by the container - it just pushed the trailing Add button out
+     past the card's right edge instead of the columns ever compressing to
+     the declared 2fr/1fr/1fr/1fr/auto ratio. Forcing min-width:0 is the
+     standard fix: it lets every column actually shrink to its fr share. */
+  .admin-grid-form > *{ min-width:0; }
   /* Grid items stretch to the row's full height by default - a button next
      to an input/select ends up forced to that taller height (inputs carry
      more padding plus a 1px border the button doesn't have), with its text
