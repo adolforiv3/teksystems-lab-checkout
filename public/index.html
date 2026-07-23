@@ -380,6 +380,10 @@
   .badge.active{ background:var(--amber-bg); color:var(--amber); }
   .badge.returned{ background:var(--teal-bg); color:var(--teal); }
   .badge.indef{ background:rgba(120,120,128,0.16); color:var(--ink-soft); }
+  .badge.missing{ background:var(--red-bg); color:var(--red); }
+  .txn-item-line{ display:flex; align-items:center; justify-content:space-between; gap:10px; }
+  .txn-item-line .txn-item-info{ min-width:0; }
+  .report-missing-btn{ font-size:11px; padding:5px 10px; flex-shrink:0; }
   .qr-box{ display:flex; gap:20px; align-items:center; flex-wrap:wrap; }
   .qr-box img{ border:8px solid #fff; border-radius:var(--r-md); box-shadow:var(--shadow-md); }
   .small-note{ font-size:13px; color:var(--ink-soft); line-height:1.5; }
@@ -3994,27 +3998,48 @@ function togglePersonDetail(personRow, g){
 // short.
 function buildTxnItemLine(c, it){
   const line = document.createElement('div');
-  line.className = 'mono';
+  line.className = 'mono txn-item-line';
   line.style.fontSize = '12px';
-  line.style.marginTop = '2px';
+  line.style.marginTop = '4px';
   const kitTag = it.kitName
     ? ` <span style="color:var(--ink-soft); font-size:10px;">(${escapeAttr(it.kitName)})</span>`
     : '';
   if(it.returned){
-    line.style.textDecoration = 'line-through';
-    line.style.color = 'var(--ink-soft)';
-    line.innerHTML = `${escapeAttr(it.name)} ×${it.qty}${kitTag}`;
+    const info = document.createElement('span');
+    info.className = 'txn-item-info';
+    info.style.textDecoration = 'line-through';
+    info.style.color = 'var(--ink-soft)';
+    info.innerHTML = `${escapeAttr(it.name)} ×${it.qty}${kitTag}`;
+    line.appendChild(info);
     return line;
   }
   if(it.missing){
-    line.innerHTML = `<span style="color:var(--red); font-weight:700;">⚠ MISSING</span> ${escapeAttr(it.name)} ×${it.qty}${kitTag}`;
+    const info = document.createElement('span');
+    info.className = 'txn-item-info';
+    info.innerHTML = `<span class="badge missing" style="margin-right:6px;">missing</span>${escapeAttr(it.name)} ×${it.qty}${kitTag}`;
+    line.appendChild(info);
     return line;
   }
-  line.innerHTML = `${escapeAttr(it.name)} ×${it.qty}${kitTag} <button type="button" class="link-btn report-missing-btn" style="font-size:10px;">report missing</button>`;
-  line.querySelector('.report-missing-btn').onclick = async ()=>{
+  const info = document.createElement('span');
+  info.className = 'txn-item-info';
+  info.innerHTML = `${escapeAttr(it.name)} ×${it.qty}${kitTag}`;
+  line.appendChild(info);
+
+  // A real button, not an inline text link next to the item name - this is
+  // a status change (the item becomes trackable in the Missing Items
+  // bucket), not a note being attached to it, so it needs to read as an
+  // actual action a click sets in motion, matching the weight of every
+  // other button in this row (Mark returned, Edit items, Resend email).
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'btn btn-ghost report-missing-btn';
+  btn.textContent = '🚩 Report Lost/Missing';
+  line.appendChild(btn);
+
+  btn.onclick = async ()=>{
     const note = await showModal({
-      title: 'Report missing',
-      msg: `Report "${it.name}" from ${c.name}'s checkout as missing. Add any details you have (optional) - where it was last seen, etc.`,
+      title: 'Report lost / missing item',
+      msg: `Flag "${it.name}" from ${c.name}'s checkout as physically lost or missing. It'll show up in Missing Items until it's found or written off. Add any details you have (optional) - where it was last seen, etc.`,
       multiline: true,
       okText: 'Report Missing',
     });
