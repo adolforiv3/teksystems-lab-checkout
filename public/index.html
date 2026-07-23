@@ -109,6 +109,16 @@
   .chip:hover{ border-color:var(--ink-soft); color:var(--ink); }
   .chip.active{ background:var(--ink); color:var(--card); border-color:var(--ink); }
 
+  .kit-cards-label{ font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:.05em; color:var(--ink-soft); margin-bottom:10px; }
+  .kit-cards{ display:flex; gap:12px; overflow-x:auto; padding-bottom:6px; margin-bottom:22px; }
+  .kit-card{
+    flex:0 0 auto; width:220px;
+    background:var(--card); border:1px solid var(--border); border-radius:var(--r-md);
+    padding:14px 16px;
+  }
+  .kit-card-name{ font-weight:700; font-size:14px; margin-bottom:4px; }
+  .kit-card-items{ font-size:12px; color:var(--ink-soft); margin-bottom:12px; line-height:1.4; max-height:54px; overflow:hidden; }
+
   .grid{
     display:grid; grid-template-columns:repeat(auto-fill, minmax(220px,1fr));
     gap:16px; margin-bottom:40px;
@@ -568,6 +578,10 @@
       <button class="btn btn-teal" id="scanBtn" type="button">📷 Scan</button>
       <button class="btn btn-ghost" id="returnItemsBtn" type="button">↩ Return Items</button>
     </div>
+    <div id="kitCardsWrap" style="display:none;">
+      <div class="kit-cards-label">Quick-add kits</div>
+      <div id="kitCards" class="kit-cards"></div>
+    </div>
     <div class="chipbar" id="categoryChips"></div>
     <div id="itemGrid" class="grid"><div class="loading">Loading inventory…</div></div>
   </main>
@@ -674,6 +688,7 @@
         <button class="admin-nav-btn" type="button" data-target="adminAccounts">Admin Accounts</button>
         <button class="admin-nav-btn" type="button" data-target="assignSupplies">Assign Supplies</button>
         <button class="admin-nav-btn" type="button" data-target="checkoutLog">Checkout Log</button>
+        <button class="admin-nav-btn" type="button" data-target="kits">Kits</button>
         <button class="admin-nav-btn" type="button" data-target="inventory">Lab Inventory</button>
         <button class="admin-nav-btn" type="button" id="companyInvNavBtn" data-target="companyInventory" style="display:none;">Company Inventory</button>
         <button class="admin-nav-btn" type="button" id="auditLogNavBtn" data-target="auditLog" style="display:none;">Classified Access Log</button>
@@ -754,6 +769,11 @@
             confirmation email either way.
           </div>
 
+          <div class="admin-grid-form" id="assignKitForm" style="grid-template-columns:2fr auto; margin-bottom:10px; display:none;">
+            <select id="assignKitSelect" class="mono"></select>
+            <button class="btn btn-ghost" id="assignKitLoadBtn" type="button">Load Kit</button>
+          </div>
+
           <div class="admin-grid-form" style="grid-template-columns:2fr 1fr auto;">
             <select id="assignItemSelect" class="mono"></select>
             <input type="number" id="assignQty" min="1" value="1" class="mono" placeholder="Qty">
@@ -782,6 +802,32 @@
             <div class="chip" data-logfilter="returned">returned</div>
           </div>
           <table id="logTable"><thead><tr><th>Who</th><th>Status</th><th></th></tr></thead><tbody></tbody></table>
+        </div>
+
+        <div class="admin-section" data-admin-section="kits">
+          <h2>Kits</h2>
+          <div class="small-note" style="margin-bottom:14px;">
+            Bundle items that get checked out together often (a field repair kit, a starter toolkit) into one
+            quick-add for the checkout screen. A kit is just a shortcut for building a checkout — every item in
+            it still keeps its own quantity, notes, and return status once it's checked out.
+          </div>
+
+          <div id="kitsList" style="display:flex; flex-direction:column; gap:8px; margin-bottom:16px;"></div>
+
+          <div class="small-note mono" id="kitFormTitle" style="margin-bottom:8px; text-transform:uppercase; letter-spacing:.05em;">Build a new kit</div>
+          <div class="field"><label>Kit name</label><input type="text" id="kitNameInput" placeholder="Field Repair Kit" class="mono"></div>
+
+          <div class="admin-grid-form" style="grid-template-columns:2fr 1fr auto;">
+            <select id="kitItemSelect" class="mono"></select>
+            <input type="number" id="kitItemQty" min="1" value="1" class="mono" placeholder="Qty">
+            <button class="btn btn-teal" id="kitItemAddBtn" type="button">Add</button>
+          </div>
+          <div id="kitBuilderLines" style="margin-bottom:6px;"></div>
+
+          <div style="display:flex; gap:8px; margin-top:10px;">
+            <button class="btn btn-teal" id="kitSaveBtn" type="button" style="flex:1">Save Kit</button>
+            <button class="btn btn-ghost" id="kitCancelEditBtn" type="button" style="display:none;">Cancel</button>
+          </div>
         </div>
 
         <div class="admin-section" data-admin-section="inventory">
@@ -883,6 +929,7 @@
 <script>
 let inventory = [];   // {id, name, category, qty, notes}
 let checkouts = [];   // {id, name, email, returnDate|null, indefinite, createdAt, items:[{itemId,name,qty,returned}]}
+let kits = [];         // {id, name, items:[{itemId,qty}]} - a checkout-building shortcut, not a new inventory concept; see kits.mjs
 let checkedOutIndex = new Map(); // itemId -> outstanding qty, derived from `checkouts` - see reindexCheckouts()
 let cart = [];         // {itemId, name, qty}
 let activeCategory = "all";
@@ -904,6 +951,7 @@ let labPasscode = "";
 function labUrlParam(){ return currentLab.accessToken || currentLab.id || ''; }
 function invUrl(){ return '/.netlify/functions/inventory?lab=' + encodeURIComponent(labUrlParam()); }
 function checkoutsUrl(){ return '/.netlify/functions/checkouts?lab=' + encodeURIComponent(labUrlParam()); }
+function kitsUrl(){ return '/.netlify/functions/kits?lab=' + encodeURIComponent(labUrlParam()); }
 
 function clearAdminSession(){
   adminUnlocked = false;
@@ -1451,10 +1499,10 @@ let inventoryLoadFailed = false;
 let checkoutsLoadFailed = false;
 
 async function loadData(){
-  // Fetch inventory and checkouts in parallel instead of one after the
-  // other - same two round trips, half the wall-clock wait before the page
-  // has anything to render.
-  const [invResult, coResult] = await Promise.allSettled([apiGet(invUrl()), apiGet(checkoutsUrl())]);
+  // Fetch inventory, checkouts, and kits in parallel instead of one after
+  // the other - same three round trips, half the wall-clock wait before the
+  // page has anything to render.
+  const [invResult, coResult, kitResult] = await Promise.allSettled([apiGet(invUrl()), apiGet(checkoutsUrl()), apiGet(kitsUrl())]);
 
   if(invResult.status === 'fulfilled'){
     inventory = invResult.value;
@@ -1475,6 +1523,15 @@ async function loadData(){
     console.error('loadData: failed to fetch checkouts for this lab', coResult.reason);
   }
   reindexCheckouts();
+
+  // Kits are a convenience shortcut on top of inventory, not core data - a
+  // failure here shouldn't block or alarm anyone, just fall back to
+  // whatever was already loaded (or an empty list) and log it.
+  if(kitResult.status === 'fulfilled'){
+    kits = kitResult.value;
+  } else {
+    console.error('loadData: failed to fetch kits for this lab', kitResult.reason);
+  }
 
   if(inventoryLoadFailed || checkoutsLoadFailed){
     showToast("Couldn't load the latest data - check your connection and try again");
@@ -1562,6 +1619,7 @@ function renderGrid(){
       await loadData();
       renderChips();
       renderGrid();
+      renderKitCards();
     };
     return;
   }
@@ -1623,6 +1681,72 @@ function addToCart(item, qty){
   showToast(`Added ${item.name} to cart`);
 }
 
+// One-click add every item a kit references, each as its own normal cart
+// line - same end state as adding them one at a time by hand, just faster.
+// Availability is re-checked here against *current* stock (not whatever it
+// was when the kit was built), and each line is capped exactly like a
+// manual add-to-cart would be - a kit can only ever promise a recipe, not a
+// hold on real inventory. An item that's out of stock, or that no longer
+// exists in this lab's inventory at all (deleted since the kit was built),
+// is silently skipped rather than blocking the rest of the kit from being
+// added; the summary toast below is what surfaces that to the shopper.
+function addKitToCart(kit){
+  let addedCount = 0;
+  const short = [];
+  kit.items.forEach(ref=>{
+    const item = inventory.find(i=>i.id===ref.itemId);
+    if(!item){ short.push('an item that\'s no longer available'); return; }
+    const existing = cart.find(c=>c.itemId===item.id);
+    const avail = availableQty(item);
+    const already = existing ? existing.qty : 0;
+    const room = Math.max(0, avail - already);
+    if(room <= 0){ short.push(item.name); return; }
+    const toAdd = Math.min(room, ref.qty);
+    if(toAdd < ref.qty) short.push(item.name);
+    if(existing) existing.qty += toAdd;
+    else cart.push({itemId:item.id, name:item.name, qty:toAdd});
+    addedCount++;
+  });
+  renderCart();
+  if(addedCount === 0){
+    showToast(`Nothing from "${kit.name}" is available right now`);
+  } else if(short.length === 0){
+    showToast(`Added "${kit.name}" to cart`);
+  } else {
+    showToast(`Added "${kit.name}" — short on ${short.join(', ')}`);
+  }
+}
+
+function renderKitCards(){
+  const wrap = document.getElementById('kitCardsWrap');
+  const holder = document.getElementById('kitCards');
+  if(!kits || kits.length === 0){
+    wrap.style.display = 'none';
+    return;
+  }
+  wrap.style.display = 'block';
+  holder.innerHTML = "";
+  kits.forEach(kit=>{
+    const summary = kit.items.map(ref=>{
+      const item = inventory.find(i=>i.id===ref.itemId);
+      return `${item ? item.name : 'unavailable item'} ×${ref.qty}`;
+    }).join(', ');
+    const anyAvailable = kit.items.some(ref=>{
+      const item = inventory.find(i=>i.id===ref.itemId);
+      return item && availableQty(item) > 0;
+    });
+    const card = document.createElement('div');
+    card.className = 'kit-card';
+    card.innerHTML = `
+      <div class="kit-card-name">${escapeAttr(kit.name)}</div>
+      <div class="kit-card-items">${escapeAttr(summary)}</div>
+      <button class="btn btn-teal btn-full" type="button" ${anyAvailable?'':'disabled'}>Add Kit</button>
+    `;
+    card.querySelector('button').onclick = ()=> addKitToCart(kit);
+    holder.appendChild(card);
+  });
+}
+
 async function refreshAndReconcileCart(){
   await loadData();
   let changed = false;
@@ -1645,6 +1769,7 @@ async function refreshAndReconcileCart(){
   }
   renderCart();
   renderGrid();
+  renderKitCards();
   return changed;
 }
 
@@ -2763,6 +2888,56 @@ function renderAssignItemOptions(){
   if(prev && inventory.some(i=>i.id===prev)) sel.value = prev;
 }
 
+// Only shown once at least one kit exists for this lab - nothing to load
+// otherwise, so no point cluttering the form with an empty picker.
+function renderAssignKitSelect(){
+  const form = document.getElementById('assignKitForm');
+  const sel = document.getElementById('assignKitSelect');
+  if(!kits || kits.length === 0){
+    form.style.display = 'none';
+    return;
+  }
+  form.style.display = 'grid';
+  const prev = sel.value;
+  sel.innerHTML = "";
+  kits.forEach(kit=>{
+    const opt = document.createElement('option');
+    opt.value = kit.id;
+    opt.textContent = kit.name;
+    sel.appendChild(opt);
+  });
+  if(prev && kits.some(k=>k.id===prev)) sel.value = prev;
+}
+
+document.getElementById('assignKitLoadBtn').onclick = ()=>{
+  const kit = kits.find(k=>k.id===document.getElementById('assignKitSelect').value);
+  if(!kit){ showToast('Pick a kit first'); return; }
+  // Same "cap to what's actually available, note what's short" behavior as
+  // addKitToCart() on the shopper side - the admin can still edit or remove
+  // any line by hand afterward, this is just the quick-fill.
+  let addedCount = 0;
+  const short = [];
+  kit.items.forEach(ref=>{
+    const item = inventory.find(i=>i.id===ref.itemId);
+    if(!item){ short.push('an item that\'s no longer available'); return; }
+    const existing = assignCart.find(c=>c.itemId===item.id);
+    const avail = availableQty(item);
+    const already = existing ? existing.qty : 0;
+    const room = Math.max(0, avail - already);
+    if(room <= 0){ short.push(item.name); return; }
+    const toAdd = Math.min(room, ref.qty);
+    if(toAdd < ref.qty) short.push(item.name);
+    if(existing) existing.qty += toAdd;
+    else assignCart.push({itemId:item.id, name:item.name, qty:toAdd});
+    addedCount++;
+  });
+  renderAssignLines();
+  renderAssignItemOptions();
+  if(addedCount === 0) showToast(`Nothing from "${kit.name}" is available right now`);
+  else if(short.length === 0) showToast(`Loaded "${kit.name}"`);
+  else showToast(`Loaded "${kit.name}" — short on ${short.join(', ')}`);
+};
+
 function renderAssignLines(){
   const wrap = document.getElementById('assignLines');
   if(assignCart.length === 0){
@@ -2849,6 +3024,169 @@ document.getElementById('assignSubmitBtn').onclick = async ()=>{
   btn.disabled = false; btn.textContent = 'Assign Items';
 };
 
+/* ---------- ADMIN: kits (lab-scoped - build/edit/delete a quick-add bundle) ---------- */
+let kitBuilderItems = []; // {itemId, name, qty} - the working list for the kit currently being built/edited
+let editingKitId = null;
+
+function renderKitItemSelect(){
+  const sel = document.getElementById('kitItemSelect');
+  const prev = sel.value;
+  sel.innerHTML = "";
+  if(inventory.length === 0){
+    sel.innerHTML = '<option value="">No inventory yet</option>';
+    return;
+  }
+  inventory.forEach(item=>{
+    const opt = document.createElement('option');
+    opt.value = item.id;
+    opt.textContent = `${item.name} (${item.qty} on hand)`;
+    sel.appendChild(opt);
+  });
+  if(prev && inventory.some(i=>i.id===prev)) sel.value = prev;
+}
+
+function renderKitBuilderLines(){
+  const wrap = document.getElementById('kitBuilderLines');
+  if(kitBuilderItems.length === 0){
+    wrap.innerHTML = '<div class="empty" style="padding:10px 0;">No items added yet.</div>';
+    return;
+  }
+  wrap.innerHTML = "";
+  kitBuilderItems.forEach((c,idx)=>{
+    const line = document.createElement('div');
+    line.className = 'cart-line';
+    line.innerHTML = `<span class="cart-name">${escapeAttr(c.name)} <span class="mono" style="color:var(--ink-soft)">×${c.qty}</span></span><button class="rm">✕</button>`;
+    line.querySelector('.rm').onclick = ()=>{ kitBuilderItems.splice(idx,1); renderKitBuilderLines(); };
+    wrap.appendChild(line);
+  });
+}
+
+document.getElementById('kitItemAddBtn').onclick = ()=>{
+  const sel = document.getElementById('kitItemSelect');
+  const itemId = sel.value;
+  const item = inventory.find(i=>i.id===itemId);
+  if(!item){ showToast('Pick an item first'); return; }
+  if(item.qty <= 0){ showToast('That item has none on hand'); return; }
+  const qtyInput = document.getElementById('kitItemQty');
+  let qty = Math.max(1, parseInt(qtyInput.value) || 1);
+  // Capped against total on-hand, not current availability - a kit is a
+  // recipe that outlives any one moment's stock level, so it's checked
+  // against real availability again later, at actual add-to-cart time.
+  if(qty > item.qty){ qty = item.qty; showToast(`Only ${item.qty} on hand — capped`); }
+
+  const existing = kitBuilderItems.find(c=>c.itemId===item.id);
+  if(existing){
+    existing.qty = Math.min(item.qty, existing.qty + qty);
+  } else {
+    kitBuilderItems.push({itemId:item.id, name:item.name, qty});
+  }
+  renderKitBuilderLines();
+};
+
+function startEditKit(kit){
+  editingKitId = kit.id;
+  document.getElementById('kitNameInput').value = kit.name;
+  // Resolve display names live from the currently loaded inventory - a kit
+  // only ever stores {itemId, qty} (see kits.mjs), never a captured name.
+  // An item that's since been deleted (or reclassified out of this admin's
+  // clearance) is simply dropped here rather than shown with a blank name -
+  // saving the kit again afterward persists that drop server-side too.
+  kitBuilderItems = kit.items
+    .map(it=>{
+      const item = inventory.find(i=>i.id===it.itemId);
+      return item ? {itemId:it.itemId, name:item.name, qty:it.qty} : null;
+    })
+    .filter(Boolean);
+  renderKitBuilderLines();
+  document.getElementById('kitSaveBtn').textContent = 'Save Changes';
+  document.getElementById('kitCancelEditBtn').style.display = 'inline-block';
+  document.getElementById('kitFormTitle').textContent = 'Edit kit: ' + kit.name;
+}
+
+function cancelEditKit(){
+  editingKitId = null;
+  kitBuilderItems = [];
+  document.getElementById('kitNameInput').value = '';
+  document.getElementById('kitItemQty').value = '1';
+  renderKitBuilderLines();
+  document.getElementById('kitSaveBtn').textContent = 'Save Kit';
+  document.getElementById('kitCancelEditBtn').style.display = 'none';
+  document.getElementById('kitFormTitle').textContent = 'Build a new kit';
+}
+document.getElementById('kitCancelEditBtn').onclick = cancelEditKit;
+
+function renderKitsList(){
+  const wrap = document.getElementById('kitsList');
+  if(!kits || kits.length === 0){
+    wrap.innerHTML = '<div class="empty" style="padding:8px 0;">No kits yet — build one below.</div>';
+    return;
+  }
+  wrap.innerHTML = "";
+  kits.forEach(kit=>{
+    const itemsText = kit.items.map(it=>{
+      const item = inventory.find(i=>i.id===it.itemId);
+      return `${item ? item.name : 'unavailable item'} ×${it.qty}`;
+    }).join(', ');
+    const row = document.createElement('div');
+    row.className = 'lab-row';
+    row.innerHTML = `
+      <span class="lab-row-name">
+        ${escapeAttr(kit.name)}
+        <div class="small-note" style="margin-top:2px; font-weight:400;">${escapeAttr(itemsText || 'no items')}</div>
+      </span>
+      <div class="lab-card-actions">
+        <button class="lab-icon-btn edit-kit-btn" type="button" title="Edit kit">✎</button>
+        <button class="lab-icon-btn del-kit-btn" type="button" title="Delete kit">🗑</button>
+      </div>
+    `;
+    row.querySelector('.edit-kit-btn').onclick = ()=> startEditKit(kit);
+    row.querySelector('.del-kit-btn').onclick = async ()=>{
+      const ok = await showModal({title:'Delete kit', msg:`Delete "${kit.name}"? The items themselves aren't affected — only this shortcut.`, okText:'Delete'});
+      if(!ok) return;
+      try{
+        kits = await apiWrite(kitsUrl(), 'DELETE', {id:kit.id}, true);
+        if(editingKitId === kit.id) cancelEditKit();
+        renderKitsList();
+        renderKitCards();
+        showToast('Kit deleted');
+      }catch(e){
+        handleAdminApiError(e);
+      }
+    };
+    wrap.appendChild(row);
+  });
+}
+
+document.getElementById('kitSaveBtn').onclick = async ()=>{
+  const name = document.getElementById('kitNameInput').value.trim();
+  if(!name){ showToast('Enter a kit name'); return; }
+  if(kitBuilderItems.length === 0){ showToast('Add at least one item'); return; }
+
+  const btn = document.getElementById('kitSaveBtn');
+  btn.disabled = true;
+  try{
+    const payload = { name, items: kitBuilderItems.map(c=>({itemId:c.itemId, qty:c.qty})) };
+    if(editingKitId){
+      kits = await apiWrite(kitsUrl(), 'PUT', {id: editingKitId, ...payload}, true);
+      showToast('Kit updated');
+    } else {
+      kits = await apiWrite(kitsUrl(), 'POST', payload, true);
+      showToast('Kit created');
+    }
+    cancelEditKit();
+    renderKitsList();
+    renderKitCards();
+  }catch(e){
+    handleAdminApiError(e);
+  }
+  btn.disabled = false;
+};
+
+function renderKits(){
+  renderKitItemSelect();
+  renderKitsList();
+}
+
 let logFilter = 'all';
 let logSearchTerm = '';
 document.querySelectorAll('[data-logfilter]').forEach(chip=>{
@@ -2869,6 +3207,8 @@ function renderAdmin(){
   renderInvTable();
   renderLog();
   renderAssignItemOptions();
+  renderAssignKitSelect();
+  renderKits();
 }
 
 /* ---------- Notes: history list + pencil-edit + add box ---------- */
@@ -3913,6 +4253,7 @@ async function enterLab(lab, token){
   renderChips();
   renderGrid();
   renderCart();
+  renderKitCards();
 }
 
 /* ---------- init ---------- */
