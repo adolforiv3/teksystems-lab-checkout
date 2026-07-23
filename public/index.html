@@ -417,6 +417,8 @@
   #topActions{ display:none; }
   #lab-picker-view{ display:none; }
   #main-view{ display:none; }
+  #client-view{ display:none; }
+  #client-view main{ max-width:920px; }
   .lab-card-actions{ display:flex; gap:4px; align-items:center; }
   .lab-icon-btn{ background:none; border:none; cursor:pointer; font-size:14px; color:var(--ink-soft); padding:4px 6px; border-radius:var(--r-sm); transition:all .15s ease; }
   .lab-icon-btn:hover{ color:var(--teal); background:var(--teal-bg); }
@@ -799,6 +801,7 @@
             <input type="email" id="newAdminEmail" placeholder="Email (for low-stock alerts)" class="mono">
             <select id="newAdminRole" class="mono">
               <option value="labadmin">Lab-admin</option>
+              <option value="client">Client DRI</option>
               <option value="superadmin">Superadmin</option>
             </select>
           </div>
@@ -1012,6 +1015,45 @@
         </div>
 
       </div>
+    </div>
+  </main>
+</div>
+
+<!-- CLIENT PORTAL VIEW -->
+<!-- A Client DRI never sees the shopper view or the admin panel - both are
+     built entirely around a specific lab, and a client isn't scoped to
+     one. This is its own top-level view: a company-wide, delabeled catalog
+     (see inventory.mjs's client branch on ?all=1) plus their own source
+     request history. No lab picking, no admin tooling. -->
+<div id="client-view">
+  <header class="top">
+    <div>
+      <div class="brand-eyebrow">Client Portal</div>
+      <div class="brand-title">Source Inventory</div>
+    </div>
+    <div class="manifest-id">
+      <span id="clientUserInfo"></span><br>
+      <button class="link-btn" id="clientSignOutBtn" style="padding:0;">Sign Out</button>
+    </div>
+  </header>
+  <main>
+    <div class="toolbar">
+      <input type="text" id="clientSearch" placeholder="search items…" class="mono">
+    </div>
+    <div class="chipbar" style="margin-bottom:18px;">
+      <div class="chip active" data-clienttab="catalog">Browse Inventory</div>
+      <div class="chip" data-clienttab="requests">My Requests</div>
+    </div>
+
+    <div id="clientCatalogSection">
+      <div id="clientCatalogGrid" class="grid"><div class="loading">Loading inventory…</div></div>
+    </div>
+
+    <div id="clientRequestsSection" style="display:none;">
+      <table id="clientRequestsTable">
+        <thead><tr><th>Item</th><th>Qty</th><th>Status</th><th>Requested</th></tr></thead>
+        <tbody></tbody>
+      </table>
     </div>
   </main>
 </div>
@@ -2360,6 +2402,10 @@ let transferDirection = 'send';
 let transferSendCart = [];   // {itemId, name, qty} - built from the CURRENT lab's own inventory (the "New Transfer" builder always proposes relative to currentLab)
 let transferReqCart = [];    // {name, qty} - free-text, since a request never sees the other lab's real inventory
 let transferFilter = 'action';
+let clientCatalog = [];      // sanitized, cross-lab items for a Client DRI - see sanitizeItemForRole() in inventory.mjs
+let clientRequests = [];     // this client org's own source-request history - see source-requests.mjs
+let clientSearchTerm = '';
+let clientTab = 'catalog';
 
 // Labs the CURRENT admin is allowed to see/manage - superadmins get
 // everything (except a lab that itself carries a classification tier they
@@ -2395,6 +2441,13 @@ function updateTopActionsVisibility(){
 async function enterAdminView(sectionToShow){
   const ok = await ensureAdminUnlocked();
   if(!ok) return;
+  // A Client DRI never sees the lab-scoped admin panel at all - it's built
+  // entirely around managing one specific lab, which a client isn't scoped
+  // to (see isClient() in lib/auth.mjs). Redirect here rather than at every
+  // call site, so anything that ever calls enterAdminView() (admin sign-in,
+  // "no lab selected" screen, switch-lab) routes a client correctly by
+  // construction instead of by remembering to check first.
+  if(adminUser.role === 'client'){ await enterClientView(); return; }
   document.getElementById('lab-picker-view').style.display = 'none';
   document.getElementById('main-view').style.display = 'none';
   document.getElementById('admin-view').style.display = 'block';
@@ -2469,6 +2522,144 @@ document.getElementById('signOutBtn').onclick = async ()=>{
   showNoLabSelected();
 };
 document.getElementById('changePwBtn').onclick = ()=> showChangePasswordModal();
+
+/* ---------- CLIENT PORTAL ---------- */
+// A Client DRI never sees the shopper view (built around one lab's own
+// inventory + cart) or the admin panel (built around managing one lab) -
+// both concepts a client isn't scoped to. This is its own top-level view:
+// a company-wide, delabeled catalog (inventory.mjs's client branch on
+// ?all=1 already stripped lab/project identity server-side - nothing here
+// re-adds it) plus their own source-request history.
+async function fetchClientCatalogSafe(){
+  try{
+    return await apiGet('/.netlify/functions/inventory?all=1');
+  }catch(err){
+    handleAdminApiError(err, "Couldn't load inventory");
+    return [];
+  }
+}
+async function fetchClientRequestsSafe(){
+  try{
+    return await apiGet('/.netlify/functions/source-requests');
+  }catch(err){
+    handleAdminApiError(err, "Couldn't load your requests");
+    return [];
+  }
+}
+
+function buildClientItemCard(item){
+  const card = document.createElement('div');
+  card.className = 'item-card' + (item.available===0 ? ' out':'');
+  const col = categoryColor(item.category);
+  if(item.available !== 0){ card.style.borderLeftColor = col.solid; }
+  card.innerHTML = `
+    <div class="item-cat mono" style="color:${col.solid}">${item.category||'uncategorized'}</div>
+    ${item.restricted ? `<div class="badge" title="Requires a release passcode at checkout" style="background:var(--red-bg); color:var(--red); margin-bottom:4px; display:inline-block;">Restricted</div>` : ''}
+    <div class="item-name">${item.name}</div>
+    <div class="item-stock">
+      <span>available</span>
+      <span class="stock-num ${item.available===0?'zero':''}">${item.available} / ${item.qty}</span>
+    </div>
+    <div class="add-row">
+      <input type="number" class="qty-input mono" min="1" max="${item.available}" value="${item.available>0?1:0}" ${item.available===0?'disabled':''}>
+      <button class="btn btn-teal" style="flex:1" ${item.available===0?'disabled':''}>Request</button>
+    </div>
+  `;
+  const qtyInput = card.querySelector('.qty-input');
+  const btn = card.querySelector('button');
+  btn.onclick = async ()=>{
+    const q = Math.min(item.available, Math.max(1, parseInt(qtyInput.value)||1));
+    btn.disabled = true;
+    try{
+      clientRequests = await apiWrite('/.netlify/functions/source-requests', 'POST', {itemId: item.id, qty: q}, true);
+      showToast(`Requested ${q} × ${item.name}`);
+      renderClientRequests();
+    }catch(err){
+      handleAdminApiError(err, "Couldn't submit that request");
+    }finally{
+      btn.disabled = item.available===0;
+    }
+  };
+  return card;
+}
+
+function renderClientCatalog(){
+  const grid = document.getElementById('clientCatalogGrid');
+  const term = clientSearchTerm.toLowerCase();
+  const items = clientCatalog.filter(i => i.name.toLowerCase().includes(term));
+  if(items.length === 0){
+    grid.innerHTML = `<div class="empty">${clientCatalog.length===0 ? 'No inventory available yet.' : 'No items match that search.'}</div>`;
+    return;
+  }
+  grid.innerHTML = '';
+  items
+    .slice()
+    .sort((a,b)=> a.name.localeCompare(b.name, undefined, {sensitivity:'base'}))
+    .forEach(item=> grid.appendChild(buildClientItemCard(item)));
+}
+
+function clientRequestBadgeClass(status){
+  if(status === 'fulfilled') return 'returned';
+  if(status === 'declined') return 'overdue';
+  return 'active';
+}
+function renderClientRequests(){
+  const tbody = document.querySelector('#clientRequestsTable tbody');
+  if(clientRequests.length === 0){
+    tbody.innerHTML = '<tr><td colspan="4" class="empty">No requests yet — browse inventory and request what you need.</td></tr>';
+    return;
+  }
+  tbody.innerHTML = clientRequests.map(r => `
+    <tr>
+      <td>${escapeAttr(r.itemName)}</td>
+      <td>${r.qty}</td>
+      <td><span class="badge ${clientRequestBadgeClass(r.status)}">${r.status}</span></td>
+      <td class="mono">${new Date(r.requestedAt).toLocaleDateString()}</td>
+    </tr>
+  `).join('');
+}
+
+async function enterClientView(){
+  document.getElementById('lab-picker-view').style.display = 'none';
+  document.getElementById('main-view').style.display = 'none';
+  document.getElementById('admin-view').style.display = 'none';
+  document.getElementById('cart-fab').style.display = 'none';
+  document.getElementById('topActions').style.display = 'none';
+  document.getElementById('client-view').style.display = 'block';
+  document.getElementById('clientUserInfo').innerHTML =
+    `Signed in as<br><b>${escapeAttr(adminUser.username)}</b> · Client DRI${adminUser.clientOrg ? ' (' + escapeAttr(adminUser.clientOrg) + ')' : ''}`;
+
+  clientTab = 'catalog';
+  document.querySelectorAll('#client-view .chip').forEach(c=> c.classList.toggle('active', c.dataset.clienttab === 'catalog'));
+  document.getElementById('clientCatalogSection').style.display = '';
+  document.getElementById('clientRequestsSection').style.display = 'none';
+  document.getElementById('clientSearch').value = '';
+  clientSearchTerm = '';
+
+  [clientCatalog, clientRequests] = await Promise.all([fetchClientCatalogSafe(), fetchClientRequestsSafe()]);
+  renderClientCatalog();
+  renderClientRequests();
+}
+
+document.querySelectorAll('#client-view [data-clienttab]').forEach(chip=>{
+  chip.onclick = ()=>{
+    document.querySelectorAll('#client-view [data-clienttab]').forEach(c=>c.classList.remove('active'));
+    chip.classList.add('active');
+    clientTab = chip.dataset.clienttab;
+    document.getElementById('clientCatalogSection').style.display = clientTab === 'catalog' ? '' : 'none';
+    document.getElementById('clientRequestsSection').style.display = clientTab === 'requests' ? '' : 'none';
+  };
+});
+document.getElementById('clientSearch').addEventListener('input', debounce((e)=>{
+  clientSearchTerm = e.target.value;
+  renderClientCatalog();
+}, 200));
+document.getElementById('clientSignOutBtn').onclick = async ()=>{
+  clearAdminSession();
+  showToast('Signed out');
+  document.getElementById('client-view').style.display = 'none';
+  showNoLabSelected();
+};
 
 /* ---------- ADMIN: lab management + switching ---------- */
 // The prominent sidebar control (visible on every admin section, not just
@@ -2764,11 +2955,25 @@ async function fetchAdminsSafe(){
   try{ return await apiGet('/.netlify/functions/admins'); }catch(e){ return []; }
 }
 
-function renderNewAdminLabsPicker(selectedIds){
+function renderNewAdminLabsPicker(selectedIds, clientOrgValue){
   const wrap = document.getElementById('newAdminLabsPicker');
   const role = document.getElementById('newAdminRole').value;
   if(role === 'superadmin'){
     wrap.innerHTML = '<div class="small-note">Superadmins automatically have access to every lab.</div>';
+    return;
+  }
+  if(role === 'client'){
+    wrap.innerHTML = `
+      <div class="field" style="margin-bottom:0;">
+        <label>Client org tag</label>
+        <input type="text" id="newAdminClientOrg" class="mono" placeholder="e.g. B" value="${escapeAttr(clientOrgValue||'')}">
+      </div>
+      <div class="small-note" style="margin-top:6px;">
+        Labels this client's source requests for your own records — it never restricts what they can see. A
+        Client DRI can browse and request from every lab's stock company-wide, with no lab or team identity ever
+        shown to them.
+      </div>
+    `;
     return;
   }
   if(!allLabs || allLabs.length === 0){
@@ -2783,7 +2988,7 @@ function renderNewAdminLabsPicker(selectedIds){
 }
 document.getElementById('newAdminRole').addEventListener('change', ()=>{
   const editing = editingAdminId ? allAdmins.find(a=>a.id===editingAdminId) : null;
-  renderNewAdminLabsPicker(editing ? (editing.labs||[]) : []);
+  renderNewAdminLabsPicker(editing ? (editing.labs||[]) : [], editing ? editing.clientOrg : '');
 });
 
 function startEditAdmin(acc){
@@ -2793,7 +2998,7 @@ function startEditAdmin(acc){
   document.getElementById('newAdminPassword').placeholder = 'New password (leave blank to keep)';
   document.getElementById('newAdminEmail').value = acc.email || '';
   document.getElementById('newAdminRole').value = acc.role;
-  renderNewAdminLabsPicker(acc.labs || []);
+  renderNewAdminLabsPicker(acc.labs || [], acc.clientOrg || '');
   document.getElementById('addAdminBtn').textContent = 'Save Changes';
   document.getElementById('cancelEditAdminBtn').style.display = 'inline-block';
   document.getElementById('adminFormTitle').textContent = 'Edit admin account: ' + acc.username;
@@ -2806,7 +3011,7 @@ function cancelEditAdmin(){
   document.getElementById('newAdminPassword').placeholder = 'Password (6+ chars)';
   document.getElementById('newAdminEmail').value = '';
   document.getElementById('newAdminRole').value = 'labadmin';
-  renderNewAdminLabsPicker([]);
+  renderNewAdminLabsPicker([], '');
   document.getElementById('addAdminBtn').textContent = 'Create Admin Account';
   document.getElementById('cancelEditAdminBtn').style.display = 'none';
   document.getElementById('adminFormTitle').textContent = 'Add a new admin account';
@@ -2824,6 +3029,8 @@ function renderAdminAccounts(){
     const isSelf = adminUser && acc.id === adminUser.id;
     const labsText = acc.role === 'superadmin'
       ? 'all labs'
+      : acc.role === 'client'
+      ? `every lab's catalog (org ${acc.clientOrg || '—'})`
       : ((acc.labs||[]).map(id=>{
           const l = allLabs.find(x=>x.id===id);
           return l ? l.name : id;
@@ -2840,7 +3047,7 @@ function renderAdminAccounts(){
       </span>
       ${isSelf ? '<span class="badge-current mono">you</span>' : ''}
       <div class="lab-card-actions">
-        <button class="lab-icon-btn grant-clearance-btn" type="button" title="Grant black/ultraBlack clearance for a lab">🔐</button>
+        ${acc.role !== 'client' ? '<button class="lab-icon-btn grant-clearance-btn" type="button" title="Grant black/ultraBlack clearance for a lab">🔐</button>' : ''}
         <button class="lab-icon-btn edit-admin-btn" type="button" title="Edit account">✎</button>
         <button class="lab-icon-btn del-admin-btn" type="button" title="Remove account">🗑</button>
       </div>
@@ -2854,51 +3061,63 @@ function renderAdminAccounts(){
       </div>
     `;
 
-    // Existing clearances, each removable independently - grant/revoke are
-    // per lab+tier, not a single toggle, mirroring the backend model.
-    const chipsWrap = row.querySelector('.clearance-chips');
-    const clearances = Array.isArray(acc.clearances) ? acc.clearances : [];
-    if(clearances.length === 0){
-      chipsWrap.innerHTML = '<span class="mono" style="font-size:10.5px; color:var(--ink-soft);">no classified clearances</span>';
+    // Clearance is a per-lab concept a client account doesn't have (see
+    // isClient() in lib/auth.mjs) - their view of classified items is
+    // fixed to the same shopper-style sanitization for everyone, never
+    // widened by a grant, so the whole clearance UI (and its "no
+    // classified clearances" placeholder, which would be misleading here
+    // rather than just empty) is skipped entirely for them. Edit/delete
+    // stay available either way - handled further down, outside this
+    // block, so a client account is never left without those.
+    if(acc.role === 'client'){
+      row.querySelector('.clearance-chips').remove();
     } else {
-      clearances.forEach(c=>{
-        const l = allLabs.find(x=>x.id===c.labId);
-        const chip = document.createElement('span');
-        chip.className = 'chip';
-        chip.style.padding = '4px 10px';
-        chip.style.cursor = 'default';
-        chip.innerHTML = `${escapeAttr(l ? l.name : c.labId)} · ${c.tier === 'ultraBlack' ? 'Ultra Black' : 'Black'} <span class="revoke-clearance" style="cursor:pointer; color:var(--red); margin-left:4px;" title="Revoke">✕</span>`;
-        chip.querySelector('.revoke-clearance').onclick = async ()=>{
-          try{
-            allAdmins = await apiWrite('/.netlify/functions/admins', 'PATCH', {id:acc.id, revokeClearance:{labId:c.labId}}, true);
-            renderAdminAccounts();
-            showToast('Clearance revoked');
-          }catch(err){
-            handleAdminApiError(err);
-          }
-        };
-        chipsWrap.appendChild(chip);
-      });
-    }
-
-    const grantForm = row.querySelector('.grant-clearance-form');
-    const labSelect = row.querySelector('.grant-lab-select');
-    labSelect.innerHTML = allLabs.map(l=>`<option value="${escapeAttr(l.id)}">${escapeAttr(l.name)}</option>`).join('') || '<option value="">No labs yet</option>';
-    row.querySelector('.grant-clearance-btn').onclick = ()=>{
-      grantForm.style.display = grantForm.style.display === 'none' ? 'flex' : 'none';
-    };
-    row.querySelector('.grant-confirm-btn').onclick = async ()=>{
-      const labId = labSelect.value;
-      const tier = row.querySelector('.grant-tier-select').value;
-      if(!labId){ showToast('No lab selected'); return; }
-      try{
-        allAdmins = await apiWrite('/.netlify/functions/admins', 'PATCH', {id:acc.id, grantClearance:{labId, tier}}, true);
-        renderAdminAccounts();
-        showToast('Clearance granted');
-      }catch(err){
-        handleAdminApiError(err);
+      // Existing clearances, each removable independently - grant/revoke
+      // are per lab+tier, not a single toggle, mirroring the backend model.
+      const chipsWrap = row.querySelector('.clearance-chips');
+      const clearances = Array.isArray(acc.clearances) ? acc.clearances : [];
+      if(clearances.length === 0){
+        chipsWrap.innerHTML = '<span class="mono" style="font-size:10.5px; color:var(--ink-soft);">no classified clearances</span>';
+      } else {
+        clearances.forEach(c=>{
+          const l = allLabs.find(x=>x.id===c.labId);
+          const chip = document.createElement('span');
+          chip.className = 'chip';
+          chip.style.padding = '4px 10px';
+          chip.style.cursor = 'default';
+          chip.innerHTML = `${escapeAttr(l ? l.name : c.labId)} · ${c.tier === 'ultraBlack' ? 'Ultra Black' : 'Black'} <span class="revoke-clearance" style="cursor:pointer; color:var(--red); margin-left:4px;" title="Revoke">✕</span>`;
+          chip.querySelector('.revoke-clearance').onclick = async ()=>{
+            try{
+              allAdmins = await apiWrite('/.netlify/functions/admins', 'PATCH', {id:acc.id, revokeClearance:{labId:c.labId}}, true);
+              renderAdminAccounts();
+              showToast('Clearance revoked');
+            }catch(err){
+              handleAdminApiError(err);
+            }
+          };
+          chipsWrap.appendChild(chip);
+        });
       }
-    };
+
+      const grantForm = row.querySelector('.grant-clearance-form');
+      const labSelect = row.querySelector('.grant-lab-select');
+      labSelect.innerHTML = allLabs.map(l=>`<option value="${escapeAttr(l.id)}">${escapeAttr(l.name)}</option>`).join('') || '<option value="">No labs yet</option>';
+      row.querySelector('.grant-clearance-btn').onclick = ()=>{
+        grantForm.style.display = grantForm.style.display === 'none' ? 'flex' : 'none';
+      };
+      row.querySelector('.grant-confirm-btn').onclick = async ()=>{
+        const labId = labSelect.value;
+        const tier = row.querySelector('.grant-tier-select').value;
+        if(!labId){ showToast('No lab selected'); return; }
+        try{
+          allAdmins = await apiWrite('/.netlify/functions/admins', 'PATCH', {id:acc.id, grantClearance:{labId, tier}}, true);
+          renderAdminAccounts();
+          showToast('Clearance granted');
+        }catch(err){
+          handleAdminApiError(err);
+        }
+      };
+    }
 
     row.querySelector('.edit-admin-btn').onclick = ()=> startEditAdmin(acc);
     row.querySelector('.del-admin-btn').onclick = async ()=>{
@@ -2922,21 +3141,25 @@ document.getElementById('addAdminBtn').onclick = async ()=>{
   const password = document.getElementById('newAdminPassword').value;
   const email = document.getElementById('newAdminEmail').value.trim();
   const role = document.getElementById('newAdminRole').value;
-  const labs = Array.from(document.querySelectorAll('#newAdminLabsPicker input[type=checkbox]:checked')).map(cb=>cb.value);
+  const labs = role === 'labadmin'
+    ? Array.from(document.querySelectorAll('#newAdminLabsPicker input[type=checkbox]:checked')).map(cb=>cb.value)
+    : [];
+  const clientOrg = role === 'client' ? (document.getElementById('newAdminClientOrg').value || '').trim() : '';
 
   if(!username){ showToast('Username required'); return; }
   if(!editingAdminId && password.length < 6){ showToast('Password must be 6+ characters'); return; }
   if(password && password.length < 6){ showToast('Password must be 6+ characters'); return; }
   if(role === 'labadmin' && labs.length === 0){ showToast('Select at least one lab for a lab-admin'); return; }
+  if(role === 'client' && !clientOrg){ showToast('Enter an org tag for this client'); return; }
 
   try{
     if(editingAdminId){
-      const body = { id: editingAdminId, username, email, role, labs };
+      const body = { id: editingAdminId, username, email, role, labs, clientOrg };
       if(password) body.password = password;
       allAdmins = await apiWrite('/.netlify/functions/admins', 'PATCH', body, true);
       showToast('Admin account updated');
     } else {
-      allAdmins = await apiWrite('/.netlify/functions/admins', 'POST', {username, password, email, role, labs}, true);
+      allAdmins = await apiWrite('/.netlify/functions/admins', 'POST', {username, password, email, role, labs, clientOrg}, true);
       showToast('Admin account created');
     }
     cancelEditAdmin();
@@ -5058,6 +5281,7 @@ function showNoLabSelected(reason){
   document.getElementById('main-view').style.display = 'none';
   document.getElementById('cart-view').style.display = 'none';
   document.getElementById('admin-view').style.display = 'none';
+  document.getElementById('client-view').style.display = 'none';
   document.getElementById('cart-fab').style.display = 'none';
   document.getElementById('topActions').style.display = 'flex';
   updateTopActionsVisibility();

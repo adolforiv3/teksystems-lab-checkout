@@ -36,3 +36,11 @@ export function adminRegistryStore() {
 export function transfersStore() {
   return getStore({ name: "lab-transfers", consistency: "strong" });
 }
+// A client's source request references one specific real item, but that
+// item lives in whichever lab happens to own it - same reasoning as
+// transfersStore above, kept as one shared, cross-lab store rather than
+// scattered across every lab's own store (a superadmin's "every source
+// request" view would otherwise mean scanning every lab in the company).
+export function sourceRequestsStore() {
+  return getStore({ name: "source-requests", consistency: "strong" });
+}

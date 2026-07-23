@@ -1,6 +1,6 @@
 import { labRegistryStore } from "./stores.mjs";
 import { updateJSON } from "./occ.mjs";
-import { canAccessLab, hasClearance } from "./auth.mjs";
+import { canAccessLab, hasClearance, isClient } from "./auth.mjs";
 
 // The very first lab this app shipped with - kept as a fixed id so its
 // pre-existing inventory/checkout data (stored under the legacy
@@ -204,6 +204,13 @@ export function labsVisibleTo(labs, admin) {
 // labsVisibleTo's superadmin branch.
 export function labDirectory(labs, admin) {
   if (!admin) return [];
+  // A Client DRI is never scoped to any lab, but is still a resolvable
+  // admin session - without this check it would fall straight through to
+  // the listing below and get every lab's name, which is exactly the
+  // "must NEVER receive project/team assignment data" leak this role
+  // exists to prevent (see isClient() and sanitizeItemForRole() in
+  // inventory.mjs, the same rule applied here).
+  if (isClient(admin)) return [];
   return labs
     .filter((l) => {
       const tier = l.classification || "standard";

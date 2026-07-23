@@ -165,6 +165,16 @@ export function isSuperadmin(admin) {
   return !!admin && admin.role === "superadmin";
 }
 
+// An external client's DRI (Designated Responsible Individual) - read-only
+// across every lab's catalog (see inventory.mjs's client branch on
+// ?all=1), never scoped to a specific lab the way a labadmin is.
+// `clientOrg` is a free-text tag (e.g. "B") set at account creation,
+// audit-only per the spec this role came from: it labels who made a source
+// request, it never restricts what inventory a client can see.
+export function isClient(admin) {
+  return !!admin && admin.role === "client";
+}
+
 export function canAccessLab(admin, labId) {
   if (!admin) return false;
   if (admin.role === "superadmin") return true;

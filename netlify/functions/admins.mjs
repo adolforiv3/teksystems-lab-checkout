@@ -61,11 +61,19 @@ export default withErrorBoundary(async (req) => {
     const body = await req.json();
     const username = (body.username || "").trim();
     const password = body.password || "";
-    const role = body.role === "superadmin" ? "superadmin" : "labadmin";
-    const labs = role === "superadmin" ? [] : Array.isArray(body.labs) ? body.labs : [];
+    const role = body.role === "superadmin" ? "superadmin" : body.role === "client" ? "client" : "labadmin";
+    const labs = role === "labadmin" && Array.isArray(body.labs) ? body.labs : [];
+    // A client DRI is never scoped to a lab the way a labadmin is (see
+    // isClient() in lib/auth.mjs) - `clientOrg` is a free-text tag
+    // (e.g. "B") that only labels their source requests for audit
+    // purposes; it never restricts what inventory they can see.
+    const clientOrg = role === "client" ? (body.clientOrg || "").trim() : undefined;
 
     if (!username || password.length < 6) {
       return json({ error: "username and a password (6+ chars) required" }, 400);
+    }
+    if (role === "client" && !clientOrg) {
+      return json({ error: "an org tag is required for a client account" }, 400);
     }
 
     const { list, error } = await runAdminMutation(() =>
@@ -81,6 +89,7 @@ export default withErrorBoundary(async (req) => {
           hash,
           role,
           labs,
+          ...(role === "client" ? { clientOrg } : {}),
           email: (body.email || "").trim(),
           createdAt: new Date().toISOString(),
         };
@@ -148,7 +157,7 @@ export default withErrorBoundary(async (req) => {
           updated.salt = salt;
           updated.hash = hash;
         }
-        if (body.role === "superadmin" || body.role === "labadmin") {
+        if (body.role === "superadmin" || body.role === "labadmin" || body.role === "client") {
           // guard against demoting away the last remaining superadmin -
           // re-checked against `admins` fresh on every attempt
           if (target.role === "superadmin" && body.role !== "superadmin") {
@@ -158,10 +167,21 @@ export default withErrorBoundary(async (req) => {
             }
           }
           updated.role = body.role;
-          if (body.role === "superadmin") updated.labs = [];
+          // Lab scope and org tag are mutually exclusive with each other -
+          // switching roles clears whichever one no longer applies, rather
+          // than leaving a stale labs[] on a client or a stale clientOrg on
+          // a labadmin.
+          if (body.role !== "labadmin") updated.labs = [];
+          if (body.role !== "client") delete updated.clientOrg;
         }
-        if (Array.isArray(body.labs) && updated.role !== "superadmin") {
+        if (Array.isArray(body.labs) && updated.role === "labadmin") {
           updated.labs = body.labs;
+        }
+        if (typeof body.clientOrg === "string" && updated.role === "client") {
+          updated.clientOrg = body.clientOrg.trim();
+        }
+        if (updated.role === "client" && !updated.clientOrg) {
+          throw new ApiError("an org tag is required for a client account", 400);
         }
 
         const next = [...admins];

@@ -1,4 +1,4 @@
-import { resolveAdmin, canAccessLab, hasClearance, isSuperadmin, isValidClassification } from "./lib/auth.mjs";
+import { resolveAdmin, canAccessLab, hasClearance, isSuperadmin, isClient, isValidClassification } from "./lib/auth.mjs";
 import { labStore, labRegistryStore } from "./lib/stores.mjs";
 import { resolveLab, loadLabsForRead, labsVisibleTo } from "./lib/lab-registry.mjs";
 import { updateJSON, ConcurrentWriteError } from "./lib/occ.mjs";
@@ -45,6 +45,33 @@ function sanitizeForCheckout(item) {
   if (tier === "standard") return item;
   const { serialNumber, classification, ...rest } = item;
   return { ...rest, restricted: true };
+}
+
+// The single place role-based field-stripping happens for item data,
+// rather than each endpoint growing its own copy of this logic (the drift
+// that produces is exactly what an external client's data exposure can't
+// afford to risk). For a "client" role - see isClient() in lib/auth.mjs -
+// this is deliberately an *allowlist*, not a blocklist like
+// sanitizeForCheckout's above: a blocklist only protects against the
+// fields it was written to know about, so a field added to the item shape
+// later (or anything already here that's really just internal shorthand,
+// like admin-authored notes, low-stock thresholds, or serial numbers)
+// would leak to an external client by default instead of by decision. An
+// allowlist can't drift that way - a new field is invisible to a client
+// until someone deliberately adds it here. Lab/project identity isn't
+// handled here at all, since it's simply never attached to a client-facing
+// row in the first place (see the ?all=1 client branch below).
+function sanitizeItemForRole(item, role) {
+  if (role !== "client") return item;
+  const tier = item.classification || "standard";
+  return {
+    id: item.id,
+    name: item.name,
+    category: item.category || "",
+    qty: item.qty,
+    available: item.available,
+    ...(tier !== "standard" ? { restricted: true } : {}),
+  };
 }
 
 // POST/PUT/DELETE all still require canAccessLab further down regardless of
@@ -157,6 +184,43 @@ export default withErrorBoundary(async (req) => {
   const method = req.method;
 
   const admin = await resolveAdmin(req);
+
+  // Client-DRI catalog: every item across EVERY lab company-wide - a client
+  // isn't "scoped" to any lab the way a labadmin is (isClient() admins
+  // carry no labs[] at all), that's the whole point of the role. Checked
+  // and handled entirely separately from the superadmin branch just below,
+  // even though they share the same `?all=1` flag, because the two have
+  // fundamentally different field-visibility rules: the superadmin branch
+  // tags every row with labId/labName on purpose; this branch must never
+  // let that leak - the actual security requirement this role exists to
+  // satisfy - so those fields are simply never attached to a row here in
+  // the first place, not stripped after the fact. Every lab's inventory is
+  // read regardless of that lab's own lab-level classification tier (the
+  // labsVisibleTo gating below only applies to admin authority over a lab,
+  // which a client never has any of), and each item still goes through the
+  // same classification sanitization an anonymous shopper gets - see
+  // sanitizeItemForRole - so a client can never learn more about a
+  // classified item than anyone else browsing without clearance could.
+  if (method === "GET" && isClient(admin) && url.searchParams.get("all") === "1") {
+    const labs = await loadLabsForRead(labRegistryStore());
+    const rows = (
+      await Promise.all(
+        labs.map(async (lab) => {
+          const labInventoryStore = labStore(lab.id);
+          const [labInventory, labCheckouts] = await Promise.all([
+            labInventoryStore.get("inventory", { type: "json" }),
+            labInventoryStore.get("checkouts", { type: "json" }),
+          ]);
+          const checkouts = labCheckouts || [];
+          return (labInventory || []).map((item) =>
+            sanitizeItemForRole({ ...item, available: availableQty(item, checkouts) }, "client")
+          );
+        })
+      )
+    ).flat();
+    rows.sort((a, b) => (a.name || "").localeCompare(b.name || "", undefined, { sensitivity: "base" }));
+    return json(rows);
+  }
 
   // Company-wide inventory: every item across every lab a superadmin can
   // see, in one list, each tagged with which lab it belongs to. Its own
