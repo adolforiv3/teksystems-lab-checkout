@@ -1,0 +1,3956 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Supply Checkout</title>
+<script src="https://cdn.jsdelivr.net/npm/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+<style>
+  :root{
+    --paper:#f5f5f7;
+    --paper-line: rgba(0,0,0,0.05);
+    --ink:#1d1d1f;
+    --ink-soft:#6e6e73;
+    --teal:#5e5ce6;
+    --teal-dark:#4a48c4;
+    --teal-bg: rgba(94,92,230,0.1);
+    --amber:#ff9500;
+    --amber-bg: rgba(255,149,0,0.12);
+    --red:#ff3b30;
+    --red-bg: rgba(255,59,48,0.12);
+    --card:#ffffff;
+    --border: rgba(0,0,0,0.09);
+    --overlay-bg: rgba(0,0,0,0.4);
+    --shadow-sm: 0 1px 2px rgba(0,0,0,0.04), 0 1px 6px rgba(0,0,0,0.05);
+    --shadow-md: 0 4px 16px rgba(0,0,0,0.08), 0 1px 3px rgba(0,0,0,0.06);
+    --shadow-lg: 0 16px 48px rgba(0,0,0,0.16), 0 2px 8px rgba(0,0,0,0.08);
+    --r-sm:10px; --r-md:14px; --r-lg:20px; --r-pill:999px;
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+  @media (prefers-color-scheme: dark){
+    :root{
+      --paper:#000000;
+      --paper-line: rgba(255,255,255,0.07);
+      --ink:#f5f5f7;
+      --ink-soft:#98989d;
+      --teal:#7d7aff;
+      --teal-dark:#a5a3ff;
+      --teal-bg: rgba(125,122,255,0.18);
+      --amber:#ff9f0a;
+      --amber-bg: rgba(255,159,10,0.16);
+      --red:#ff453a;
+      --red-bg: rgba(255,69,58,0.16);
+      --card:#1c1c1e;
+      --border: rgba(255,255,255,0.12);
+      --overlay-bg: rgba(0,0,0,0.6);
+      --shadow-sm: 0 0 0 1px rgba(255,255,255,0.06);
+      --shadow-md: 0 0 0 1px rgba(255,255,255,0.06), 0 8px 24px rgba(0,0,0,0.5);
+      --shadow-lg: 0 0 0 1px rgba(255,255,255,0.08), 0 20px 60px rgba(0,0,0,0.6);
+    }
+  }
+  *{box-sizing:border-box; margin:0; padding:0;}
+  body{
+    background:var(--paper);
+    color:var(--ink);
+    min-height:100vh;
+    padding-bottom:100px;
+    -webkit-font-smoothing:antialiased;
+  }
+  .mono{ font-variant-numeric:tabular-nums; }
+  header.top{
+    display:flex; justify-content:space-between; align-items:flex-start;
+    padding:32px 20px 22px;
+    max-width:920px; margin:0 auto;
+  }
+  .brand-eyebrow{
+    font-size:12px; letter-spacing:.02em;
+    color:var(--teal); font-weight:600;
+  }
+  .brand-title{ font-size:30px; font-weight:700; margin-top:2px; letter-spacing:-0.02em; }
+  .manifest-id{
+    font-size:12px; color:var(--ink-soft); text-align:right; line-height:1.6;
+  }
+  main{ max-width:920px; margin:0 auto; padding:8px 20px 24px; }
+
+  .toolbar{
+    display:flex; gap:10px; flex-wrap:wrap; margin-bottom:20px; align-items:center;
+  }
+  input[type=text], input[type=email], input[type=date], input[type=password], input[type=number], select, textarea{
+    font-family:inherit;
+    /* iOS Safari auto-zooms the page on focus for any text input under
+       16px, and does not zoom back out on blur - the page stays zoomed in
+       until the user manually pinches back out. 16px is the threshold that
+       turns that off entirely, so every text field in the app (search,
+       login, quantity, etc.) uses it as a floor regardless of the visual
+       size we'd otherwise pick. */
+    font-size:16px;
+    background:var(--card);
+    border:1px solid var(--border);
+    padding:11px 14px;
+    color:var(--ink);
+    border-radius:var(--r-sm);
+    transition:border-color .15s ease, box-shadow .15s ease;
+  }
+  textarea{ resize:vertical; }
+  input:focus, select:focus, textarea:focus{
+    outline:none; border-color:var(--teal); box-shadow:0 0 0 4px var(--teal-bg);
+  }
+  input.input-error, textarea.input-error{ border-color:var(--red) !important; box-shadow:0 0 0 4px var(--red-bg) !important; }
+  button:focus-visible, .chip:focus-visible{
+    outline:2px solid var(--teal); outline-offset:2px;
+  }
+  #search{ flex:1; min-width:160px; }
+  .chipbar{ display:flex; gap:10px; flex-wrap:wrap; margin-bottom:22px; }
+  .chip{
+    font-size:12.5px; font-weight:500; letter-spacing:.01em;
+    padding:9px 17px; border:1px solid var(--border); border-radius:var(--r-pill); background:var(--card);
+    cursor:pointer; color:var(--ink-soft); user-select:none; transition:all .15s ease;
+  }
+  .chip:hover{ border-color:var(--ink-soft); color:var(--ink); }
+  .chip.active{ background:var(--ink); color:var(--card); border-color:var(--ink); }
+
+  .grid{
+    display:grid; grid-template-columns:repeat(auto-fill, minmax(220px,1fr));
+    gap:16px; margin-bottom:40px;
+  }
+  .grid-cat-header{
+    grid-column:1 / -1;
+    font-size:11.5px; font-weight:700; text-transform:uppercase;
+    letter-spacing:.05em;
+    border-left:4px solid; border-radius:var(--r-sm);
+    padding:12px 16px; margin-top:10px;
+  }
+  .grid-cat-header:first-child{ margin-top:0; }
+  .item-card{
+    background:var(--card);
+    border:1px solid var(--border);
+    border-radius:var(--r-md);
+    padding:16px 16px 14px;
+    position:relative;
+    display:flex; flex-direction:column; gap:8px;
+    box-shadow:var(--shadow-sm);
+    transition:transform .18s ease, box-shadow .18s ease;
+  }
+  .item-card:hover{ transform:translateY(-2px); box-shadow:var(--shadow-md); }
+  .item-card.out{ opacity:.55; }
+  .item-card.out:hover{ transform:none; box-shadow:var(--shadow-sm); }
+  .item-cat{
+    font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:.06em;
+  }
+  .item-name{ font-weight:600; font-size:15.5px; line-height:1.3; letter-spacing:-0.01em; }
+  .item-notes{ font-size:12.5px; color:var(--ink-soft); }
+  .item-stock{
+    font-size:12.5px; color:var(--ink-soft);
+    display:flex; justify-content:space-between; align-items:center; margin-top:auto; padding-top:10px;
+    border-top:1px solid var(--border);
+  }
+  .stock-num{ font-weight:700; color:var(--ink); }
+  .stock-num.zero{ color:var(--red); }
+  .add-row{ display:flex; gap:8px; align-items:center; }
+  .qty-input{ width:76px; text-align:center; padding:8px 6px 8px 12px; font-size:18px; font-weight:700; color:var(--ink); }
+  .btn{
+    font-family:inherit; font-size:13.5px; font-weight:600; letter-spacing:-0.01em;
+    border:none; padding:10px 16px; border-radius:var(--r-sm); cursor:pointer;
+    transition:transform .08s ease, background .15s ease, opacity .15s ease;
+  }
+  .btn:active{ transform:scale(0.96); }
+  .btn-teal{ background:var(--teal); color:#fff; }
+  .btn-teal:hover{ background:var(--teal-dark); }
+  .btn-ghost{ background:transparent; color:var(--ink); border:1px solid var(--border); }
+  .btn-ghost:hover{ border-color:var(--ink-soft); background:var(--paper); }
+  .btn-full{ width:100%; padding:13px; }
+  /* Matches the padding of the input boxes next to it in the table row
+     (inputs are 11px/14px padding + a 1px border; buttons have no border,
+     so the same padding alone would leave the button ~2px short - not
+     worth compensating for since it isn't perceptible, but font-size was
+     the real mismatch: buttons defaulted to a small 12.5px label next to
+     16px input text, which made the whole box noticeably shorter). */
+  .note-btn{ padding:11px 14px; font-size:13.5px; white-space:nowrap; }
+  .note-btn.has-note{ border-color:var(--teal); color:var(--teal); background:var(--teal-bg); }
+  .btn:disabled{ opacity:.4; cursor:not-allowed; }
+
+  /* Cart drawer */
+  #cart-fab{
+    position:fixed; bottom:24px; right:24px; z-index:40;
+    background:var(--ink); color:var(--card); border:none; border-radius:var(--r-pill);
+    padding:15px 22px; font-weight:600; font-size:14px;
+    display:flex; align-items:center; gap:9px; cursor:pointer; box-shadow:var(--shadow-lg);
+    transition:transform .15s ease;
+  }
+  #cart-fab:hover{ transform:translateY(-2px); }
+  #cart-fab .count{
+    background:var(--teal); color:#fff; border-radius:50%; width:22px; height:22px;
+    display:flex; align-items:center; justify-content:center; font-size:11px; font-weight:700;
+  }
+  #cart-view{ display:none; }
+  #cart-view main{ max-width:560px; }
+  .cart-line{
+    display:flex; justify-content:space-between; align-items:center;
+    padding:12px 0; border-bottom:1px solid var(--border); font-size:14px; gap:8px;
+  }
+  .cart-line .cart-name{ flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .cart-line .rm{ background:none; border:none; color:var(--red); cursor:pointer; font-size:18px; line-height:1; flex-shrink:0; }
+  .cart-qty{ display:flex; align-items:center; gap:6px; flex-shrink:0; }
+  .qty-btn{
+    width:28px; height:28px; padding:0; border:1px solid var(--border); background:var(--card);
+    border-radius:50%; cursor:pointer; font-size:15px; line-height:1;
+    display:flex; align-items:center; justify-content:center; color:var(--ink);
+    transition:all .15s ease;
+  }
+  .qty-btn:hover:not(:disabled){ border-color:var(--teal); color:var(--teal); background:var(--teal-bg); }
+  .qty-btn:disabled{ opacity:.35; cursor:not-allowed; }
+  .cart-qty-input{ width:56px; text-align:center; padding:10px 10px; font-size:16px; -moz-appearance:textfield; }
+  .cart-qty-input::-webkit-outer-spin-button,
+  .cart-qty-input::-webkit-inner-spin-button{ -webkit-appearance:none; margin:0; }
+  .num-cell{ width:84px; padding:9px 6px 9px 12px; }
+  /* The checked-out column is read-only text sitting next to the qty and
+     threshold columns, which are bordered input boxes with num-cell's own
+     internal padding on top of the cell's padding. Plain text with just the
+     cell's padding sits noticeably out of line with those boxes' digits.
+     Giving it the exact same box model (width, padding, border thickness)
+     as .num-cell - just with a transparent border instead of a visible one -
+     lines the digits up without guessing at pixel offsets. */
+  .num-cell-display{
+    display:inline-flex; align-items:center; box-sizing:border-box;
+    width:84px; padding:9px 6px 9px 12px; border:1px solid transparent;
+  }
+  .field{ margin-bottom:14px; display:flex; flex-direction:column; gap:6px; }
+  .field label{ font-size:12.5px; font-weight:600; color:var(--ink-soft); }
+  .field input{ width:100%; }
+  .indef-row{ display:flex; align-items:center; gap:8px; font-size:13px; color:var(--ink-soft); margin-bottom:12px; }
+
+  .toast{
+    position:fixed; bottom:28px; left:50%; transform:translateX(-50%) translateY(20px);
+    background:var(--ink); color:var(--card); padding:13px 22px; border-radius:var(--r-pill);
+    font-size:13.5px; font-weight:500; opacity:0; pointer-events:none;
+    transition:all .3s cubic-bezier(.2,.9,.3,1); box-shadow:var(--shadow-lg);
+    /* Toasts fire constantly from *inside* open modals (saving a note,
+       deleting one, editing a field) - it has to render above every overlay
+       in the app (modal-overlay:300 is the highest of the rest) or it's
+       stuck invisible behind whatever's open, exactly like the confirm
+       dialog and checked-out column bugs before it. Kept above all of them
+       with room to spare. */
+    z-index:400;
+  }
+  .toast.show{ opacity:1; transform:translateX(-50%) translateY(0); }
+
+  footer{ max-width:920px; margin:40px auto 0; padding:14px 20px; text-align:center; }
+
+  .empty{ color:var(--ink-soft); font-size:14px; padding:36px 0; text-align:center; }
+
+  /* Admin - optimized for desktop/laptop use */
+  #admin-view{ display:none; }
+  #admin-view header.top, #admin-view main{ max-width:1180px; }
+  .admin-section{ background:var(--card); border:1px solid var(--border); border-radius:var(--r-lg); padding:22px; margin-bottom:20px; overflow-x:auto; display:none; box-shadow:var(--shadow-sm); }
+  .admin-section.active{ display:block; }
+  .admin-layout{ display:flex; gap:24px; align-items:flex-start; }
+  .admin-sidebar{ display:flex; flex-direction:column; gap:2px; width:200px; flex-shrink:0; position:sticky; top:24px; }
+  .admin-nav-btn{
+    text-align:left; background:none; border:none; padding:11px 14px; border-radius:var(--r-sm);
+    font-family:inherit; font-size:13.5px; font-weight:500; letter-spacing:-0.01em;
+    color:var(--ink-soft); cursor:pointer; transition:all .15s ease;
+  }
+  .admin-nav-btn:hover{ background:var(--card); color:var(--ink); box-shadow:var(--shadow-sm); }
+  .admin-nav-btn.active{ background:var(--ink); color:var(--card); }
+  /* Sits at the very top of the sidebar, above every nav button, so which
+     lab an admin is currently managing - and that it can be changed - is
+     the first thing visible on every single admin page, not just something
+     buried inside the Labs tab. */
+  .admin-lab-switcher{
+    padding:10px 14px 12px; background:var(--teal-bg); border-radius:var(--r-md);
+    margin:0 2px 4px;
+  }
+  .admin-lab-switcher-label{
+    display:block; font-size:10.5px; font-weight:700; text-transform:uppercase;
+    letter-spacing:.06em; color:var(--teal-dark); margin-bottom:6px;
+  }
+  .admin-lab-switcher select{
+    width:100%; font-weight:600; font-size:13.5px; padding:9px 10px;
+    border-color:var(--teal); background:var(--card);
+  }
+  .admin-lab-switcher-single{
+    font-weight:600; font-size:13.5px; color:var(--ink); padding:2px 0 0;
+  }
+  .admin-sidebar-divider{ height:1px; background:var(--border); margin:10px 6px; }
+  .admin-user-info{ padding:2px 14px 6px; font-size:12px; line-height:1.4; color:var(--ink-soft); }
+  .admin-user-info b{ color:var(--ink); font-weight:600; }
+  .admin-signout-btn{
+    text-align:left; background:none; border:none; padding:11px 14px; border-radius:var(--r-sm);
+    font-family:inherit; font-size:13.5px; font-weight:500; letter-spacing:-0.01em;
+    color:var(--red); cursor:pointer; transition:all .15s ease;
+  }
+  .admin-signout-btn:hover{ background:var(--red-bg); }
+  .admin-content{ flex:1; min-width:0; }
+  .admin-section h2{ font-size:17px; font-weight:700; letter-spacing:-0.01em; margin-bottom:16px; display:flex; align-items:center; gap:8px; }
+  .admin-grid-form{ display:grid; grid-template-columns:2fr 1fr 1fr auto; gap:10px; margin-bottom:14px; }
+  table{ width:100%; border-collapse:collapse; font-size:13.5px; }
+  /* table-layout:fixed + the <colgroup> on #invTable in the markup means
+     every column's width is set explicitly once, instead of the browser
+     re-guessing it per render from whatever happens to be in each cell
+     that render (which is what caused the checked-out/delete columns to
+     drift depending on content - an empty header, a short "delete" link,
+     etc. previously had no fixed anchor). */
+  #invTable{ min-width:860px; table-layout:fixed; }
+  /* The first column stacks a variable number of elements (classification
+     badge, name, serial number, category) depending on the item, so that
+     row's total height varies a lot between a plain standard item and a
+     restricted one. Every OTHER column in that row only ever holds one
+     short control (a button, a stepper, a number). Top-aligning those too
+     (the generic td rule above) pins them to the very top of an otherwise
+     tall row, leaving a lopsided gap underneath and making the row read as
+     misaligned - centering them against the row's actual height instead
+     keeps every row looking balanced regardless of how many lines the item
+     description itself takes up. */
+  #invTable td:not(:first-child){ vertical-align:middle; }
+  #logTable{ min-width:680px; }
+  th{ text-align:left; font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:.04em; color:var(--ink-soft); padding:12px 12px; border-bottom:1px solid var(--border); }
+  td{ padding:13px 12px; border-bottom:1px solid var(--paper-line); vertical-align:top; }
+  .cat-group-row{
+    background:var(--paper); font-size:11.5px; font-weight:700; text-transform:uppercase;
+    letter-spacing:.05em;
+    border-bottom:1px solid var(--border); padding:12px 12px; border-radius:var(--r-sm);
+  }
+  .cat-group-count{ font-weight:400; color:var(--ink-soft); text-transform:none; letter-spacing:0; }
+  .cat-row{ display:flex; align-items:center; gap:6px; margin-top:2px; }
+  .cat-dot{ width:8px; height:8px; border-radius:50%; flex-shrink:0; display:inline-block; }
+  .cat-label{ font-size:12px; color:var(--ink-soft); }
+  .cat-edit-btn{ background:none; border:none; cursor:pointer; font-size:12px; color:var(--ink-soft); padding:0; line-height:1; flex-shrink:0; }
+  .cat-edit-btn:hover{ color:var(--teal); }
+  .cat-row .catEdit{ font-size:16px; padding:4px 8px; flex:1; min-width:0; }
+  .serial-row{ display:flex; align-items:center; gap:6px; margin-top:2px; }
+  .serial-label{ font-size:12px; color:var(--ink-soft); }
+  .serial-edit-btn{ background:none; border:none; cursor:pointer; font-size:12px; color:var(--ink-soft); padding:0; line-height:1; flex-shrink:0; }
+  .serial-edit-btn:hover{ color:var(--teal); }
+  .serial-row .serialEdit{ font-size:16px; padding:4px 8px; flex:1; min-width:0; }
+  .edit-items-row td, .history-row td, .person-detail-marker td, .txn-row td, .person-history-row td{ background:var(--paper); border-bottom:1px solid var(--border); }
+  .edit-items-panel{ padding:8px 2px; }
+  .history-trail{ display:flex; flex-direction:column; gap:2px; }
+  .history-entry{ display:flex; gap:14px; padding:6px 2px; font-size:13px; border-bottom:1px solid var(--paper-line); }
+  .history-entry:last-child{ border-bottom:none; }
+  .history-entry-at{ font-size:11px; color:var(--ink-soft); min-width:150px; flex-shrink:0; }
+  .person-detail-label{ font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.03em; color:var(--ink-soft); padding:6px 2px 2px; }
+  .history-trail-title{ font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.03em; color:var(--ink-soft); padding:10px 2px 6px; }
+  .txn-row td:first-child{ padding-left:26px; }
+  .person-count-tag{ font-size:10px; color:var(--ink-soft); }
+  /* Rows in the person-centric log carry very uneven content height (a
+     3-line name/email/count block next to a single badge and a single
+     button) - top-aligning every cell against that leaves the shorter
+     cells' bottom borders sitting well above the row's actual bottom edge,
+     which reads as a stray line "floating" under the button. Centering
+     everything but the first column keeps every cell's border flush with
+     the same bottom edge regardless of how much text is in column one. */
+  #logTable td:not(:first-child){ vertical-align:middle; }
+  #logTable .person-row td:last-child{ text-align:right; }
+  .history-entry-body{ display:flex; flex-direction:column; gap:6px; }
+  .backfill-form{ display:flex; align-items:center; gap:8px; }
+  .backfill-date-input{ font-size:13px; padding:5px 8px; width:auto; }
+  .badge{ font-size:10.5px; padding:4px 10px; border-radius:var(--r-pill); text-transform:uppercase; font-weight:700; letter-spacing:.03em; }
+  .badge.overdue{ background:var(--red-bg); color:var(--red); }
+  .badge.active{ background:var(--amber-bg); color:var(--amber); }
+  .badge.returned{ background:var(--teal-bg); color:var(--teal); }
+  .badge.indef{ background:rgba(120,120,128,0.16); color:var(--ink-soft); }
+  .qr-box{ display:flex; gap:20px; align-items:center; flex-wrap:wrap; }
+  .qr-box img{ border:8px solid #fff; border-radius:var(--r-md); box-shadow:var(--shadow-md); }
+  .small-note{ font-size:13px; color:var(--ink-soft); line-height:1.5; }
+  .top-actions{ display:flex; justify-content:flex-end; gap:18px; max-width:920px; margin:0 auto; padding:14px 20px 0; }
+  #topActions{ display:none; }
+  #lab-picker-view{ display:none; }
+  #main-view{ display:none; }
+  .lab-card-actions{ display:flex; gap:4px; align-items:center; }
+  .lab-icon-btn{ background:none; border:none; cursor:pointer; font-size:14px; color:var(--ink-soft); padding:4px 6px; border-radius:var(--r-sm); transition:all .15s ease; }
+  .lab-icon-btn:hover{ color:var(--teal); background:var(--teal-bg); }
+  .lab-row{
+    display:flex; align-items:center; gap:10px; padding:12px 14px;
+    border:1px solid var(--border); border-radius:var(--r-md); background:var(--card);
+    transition:all .15s ease;
+  }
+  .lab-row.current{ border-color:var(--teal); background:var(--teal-bg); }
+  .lab-row .lab-row-name{ flex:1; font-weight:600; font-size:13.5px; }
+  .lab-row .badge-current{ font-size:10.5px; font-weight:700; text-transform:uppercase; letter-spacing:.03em; color:var(--teal); }
+  .link-btn{ font-size:13px; font-weight:500; color:var(--ink-soft); background:none; border:none; cursor:pointer; transition:color .15s ease; }
+  .link-btn:hover{ color:var(--ink); }
+  .del-btn{ background:none; border:none; color:var(--red); cursor:pointer; font-size:13.5px; font-weight:500; padding:11px 0; width:100%; text-align:left; }
+  .loading{ color:var(--ink-soft); padding:40px; text-align:center; font-size:14px; }
+
+  #modal-overlay{
+    /* This is the shared confirm/prompt dialog, which can be triggered from
+       *inside* other already-open overlays (e.g. confirming "delete this
+       note" while the notes modal is open) - it has to render above every
+       other overlay in the app (return-overlay:205, notes-overlay:206,
+       session/login:210) or it renders invisible-but-technically-open behind
+       them, making the confirm buttons unreachable until the modal underneath
+       is closed. Kept above all of them with room to spare. */
+    position:fixed; inset:0; background:var(--overlay-bg); backdrop-filter:blur(20px); -webkit-backdrop-filter:blur(20px); z-index:300;
+    display:none; align-items:center; justify-content:center; padding:20px;
+  }
+  #modal-overlay.open{ display:flex; }
+  #modal-box{
+    background:var(--card); border-radius:var(--r-lg); box-shadow:var(--shadow-lg);
+    padding:26px; width:100%; max-width:340px;
+  }
+  #modal-box h3{ font-size:17px; font-weight:700; letter-spacing:-0.01em; margin-bottom:12px; }
+  #modal-box p{ font-size:14px; color:var(--ink-soft); margin-bottom:14px; line-height:1.5; }
+  #modal-box input{ width:100%; margin-bottom:14px; }
+  #modal-box textarea{ width:100%; margin-bottom:14px; min-height:110px; }
+  #modal-box .modal-actions{ display:flex; gap:8px; justify-content:flex-end; }
+
+  #login-overlay{
+    position:fixed; inset:0; background:var(--overlay-bg); backdrop-filter:blur(20px); -webkit-backdrop-filter:blur(20px); z-index:210;
+    display:none; align-items:center; justify-content:center; padding:20px;
+  }
+  #login-overlay.open{ display:flex; }
+  #login-box{
+    background:var(--card); border-radius:var(--r-lg); box-shadow:var(--shadow-lg);
+    padding:26px; width:100%; max-width:360px;
+  }
+  #login-box h3{ font-size:17px; font-weight:700; letter-spacing:-0.01em; margin-bottom:10px; }
+  #login-box p{ font-size:14px; color:var(--ink-soft); margin-bottom:14px; line-height:1.5; }
+  #login-box input{ width:100%; margin-bottom:14px; }
+  #login-box .modal-actions{ display:flex; gap:8px; justify-content:flex-end; }
+
+  /* Shared by both the "change my password" (signed in) and "set a new
+     password" (via emailed reset link) flows - same overlay/box, the
+     current-password field is just hidden for the reset-link case since
+     the token itself already proves identity. Same z-index tier as
+     #login-overlay since the two are mutually exclusive (never open at
+     the same time). */
+  #pw-overlay{
+    position:fixed; inset:0; background:var(--overlay-bg); backdrop-filter:blur(20px); -webkit-backdrop-filter:blur(20px); z-index:210;
+    display:none; align-items:center; justify-content:center; padding:20px;
+  }
+  #pw-overlay.open{ display:flex; }
+  #pw-box{
+    background:var(--card); border-radius:var(--r-lg); box-shadow:var(--shadow-lg);
+    padding:26px; width:100%; max-width:360px;
+  }
+  #pw-box h3{ font-size:17px; font-weight:700; letter-spacing:-0.01em; margin-bottom:10px; }
+  #pw-box p{ font-size:14px; color:var(--ink-soft); margin-bottom:14px; line-height:1.5; }
+  #pw-box input{ width:100%; margin-bottom:14px; }
+  #pw-box .modal-actions{ display:flex; gap:8px; justify-content:flex-end; }
+  .admin-changepw-btn{
+    text-align:left; background:none; border:none; padding:8px 14px; border-radius:var(--r-sm);
+    font-family:inherit; font-size:12.5px; font-weight:500; letter-spacing:-0.01em;
+    color:var(--ink-soft); cursor:pointer; transition:all .15s ease;
+  }
+  .admin-changepw-btn:hover{ color:var(--teal); }
+
+  @keyframes shake{
+    10%,90%{ transform:translateX(-1px); }
+    20%,80%{ transform:translateX(2px); }
+    30%,50%,70%{ transform:translateX(-5px); }
+    40%,60%{ transform:translateX(5px); }
+  }
+  .shake{ animation:shake .4s ease; }
+  input.input-error{ border-color:var(--red) !important; box-shadow:0 0 0 4px var(--red-bg) !important; }
+  .modal-msg-error{ color:var(--red) !important; font-weight:600; }
+
+  #return-overlay{
+    position:fixed; inset:0; background:var(--overlay-bg); backdrop-filter:blur(20px); -webkit-backdrop-filter:blur(20px); z-index:205;
+    display:none; align-items:center; justify-content:center; padding:20px;
+  }
+  #return-overlay.open{ display:flex; }
+  #return-box{
+    background:var(--card); border-radius:var(--r-lg); box-shadow:var(--shadow-lg);
+    padding:26px; width:100%; max-width:480px; max-height:80vh; overflow-y:auto;
+  }
+  .return-checkout-card{ border:1px solid var(--border); border-radius:var(--r-md); padding:14px; margin-bottom:12px; }
+  .return-item-row{ display:flex; align-items:center; gap:8px; padding:5px 0; font-size:13.5px; }
+  .return-item-row.already-returned{ color:var(--ink-soft); text-decoration:line-through; }
+
+  #notes-overlay{
+    position:fixed; inset:0; background:var(--overlay-bg); backdrop-filter:blur(20px); -webkit-backdrop-filter:blur(20px); z-index:206;
+    display:none; align-items:center; justify-content:center; padding:20px;
+  }
+  #notes-overlay.open{ display:flex; }
+  #notes-box{
+    background:var(--card); border-radius:var(--r-lg); box-shadow:var(--shadow-lg);
+    padding:26px; width:100%; max-width:480px; max-height:85vh; overflow-y:auto;
+    display:flex; flex-direction:column;
+  }
+  #notesList{ display:flex; flex-direction:column; gap:10px; margin-bottom:6px; max-height:38vh; overflow-y:auto; }
+  .note-entry{ border:1px solid var(--border); border-radius:var(--r-md); padding:12px; }
+  .note-entry-text{ font-size:14px; color:var(--ink); line-height:1.5; white-space:pre-wrap; word-break:break-word; }
+  .note-entry-meta{ display:flex; align-items:center; justify-content:space-between; gap:8px; margin-top:8px; font-size:11.5px; color:var(--ink-soft); }
+  .note-entry-actions{ display:flex; align-items:center; gap:14px; flex-shrink:0; }
+  .note-entry-edit-btn, .note-entry-delete-btn{ background:none; border:none; cursor:pointer; color:var(--ink-soft); font-size:12.5px; padding:2px 4px; flex-shrink:0; }
+  .note-entry-edit-btn:hover{ color:var(--teal); }
+  .note-entry-delete-btn:hover{ color:var(--red); }
+  .note-entry textarea{ width:100%; min-height:80px; margin-bottom:8px; }
+  .note-empty{ color:var(--ink-soft); font-size:13.5px; padding:4px 0 10px; }
+  #notesNewText{ width:100%; min-height:70px; }
+
+  /* Scanner */
+  .scanner-overlay{
+    position:fixed; inset:0; background:var(--overlay-bg); backdrop-filter:blur(20px); -webkit-backdrop-filter:blur(20px); z-index:150;
+    display:none; align-items:center; justify-content:center; padding:16px;
+  }
+  .scanner-overlay.open{ display:flex; }
+  .scanner-box{
+    background:var(--card); border-radius:var(--r-lg); box-shadow:var(--shadow-lg);
+    padding:20px; width:100%; max-width:420px;
+  }
+  .qr-reader-wrap{ position:relative; }
+  #qr-reader{ width:100%; border-radius:var(--r-md); overflow:hidden; background:#000; min-height:240px; }
+  .scan-checkmark{
+    position:absolute; inset:0; display:flex; align-items:center; justify-content:center;
+    background:rgba(94,92,230,.6); opacity:0; pointer-events:none; transition:opacity .15s ease;
+    border-radius:var(--r-md);
+  }
+  .scan-checkmark.show{ opacity:1; }
+  .scan-checkmark svg{ width:64px; height:64px; }
+  .scan-feedback{ min-height:20px; margin-top:10px; font-size:13px; color:var(--teal); text-align:center; }
+  #scanBtn{ white-space:nowrap; }
+  #scannerDone{ margin-top:14px; }
+
+  /* Shopper/cart side - prioritized for mobile */
+  @media (max-width:600px){
+    header.top{ flex-direction:column; align-items:flex-start; gap:8px; padding:24px 16px 16px; }
+    .manifest-id{ text-align:left; }
+    .brand-title{ font-size:24px; }
+    main{ padding:8px 14px 18px; }
+    .toolbar{ flex-direction:column; align-items:stretch; }
+    #search{ width:100%; min-width:0; }
+    #scanBtn{ width:100%; }
+    .qty-input{ width:84px; font-size:20px; padding:10px 6px 10px 12px; }
+    .btn{ padding:12px 14px; }
+    .qty-btn{ width:32px; height:32px; font-size:16px; }
+    .cart-qty-input{ width:60px; font-size:16px; padding:10px; }
+    #cart-fab{ padding:16px 22px; font-size:14px; }
+    #cart-view main{ max-width:100%; }
+    .admin-layout{ flex-direction:column; }
+    .admin-sidebar{ flex-direction:row; flex-wrap:wrap; width:100%; position:static; gap:6px; }
+    .admin-nav-btn{ flex:1 1 auto; text-align:center; padding:9px 8px; }
+  }
+</style>
+</head>
+<body>
+
+<div class="top-actions" id="topActions">
+  <button class="link-btn" id="switchLabBtn">⇄ switch lab</button>
+  <button class="link-btn" id="adminToggle">admin ⚙</button>
+</div>
+
+<!-- NO LAB SELECTED (private-by-default: there is no public directory of
+     labs to browse - a visitor has to arrive via their lab's own link) -->
+<div id="lab-picker-view">
+  <header class="top">
+    <div>
+      <div class="brand-eyebrow">Supply Checkout</div>
+      <div class="brand-title" id="noLabTitle">No Lab Selected</div>
+    </div>
+  </header>
+  <main>
+    <div id="labGrid">
+      <div class="empty" style="padding:60px 20px; max-width:420px; margin:0 auto;">
+        <div id="noLabMsg">This app is private per lab — there's no public directory to browse. Use the link your lab administrator shared with you to get in.</div>
+        <button class="btn btn-ghost" id="noLabAdminBtn" type="button" style="margin-top:18px;">Admin Sign In →</button>
+      </div>
+    </div>
+  </main>
+</div>
+
+<!-- MAIN CHECKOUT VIEW -->
+<div id="main-view">
+  <header class="top">
+    <div>
+      <div class="brand-eyebrow">Supply Checkout</div>
+      <div class="brand-title" id="labBrandTitle">Supply Checkout</div>
+    </div>
+    <div class="manifest-id">
+      Browse, scan, or search<br>
+      No account needed
+    </div>
+  </header>
+
+  <main>
+    <div class="toolbar">
+      <input type="text" id="search" placeholder="search items…" class="mono">
+      <button class="btn btn-teal" id="scanBtn" type="button">📷 Scan</button>
+      <button class="btn btn-ghost" id="returnItemsBtn" type="button">↩ Return Items</button>
+    </div>
+    <div class="chipbar" id="categoryChips"></div>
+    <div id="itemGrid" class="grid"><div class="loading">Loading inventory…</div></div>
+  </main>
+</div>
+
+<div id="scanner-overlay" class="scanner-overlay">
+  <div class="scanner-box">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
+      <div class="brand-eyebrow">Scan to Add</div>
+      <button class="link-btn" id="scannerClose">cancel ✕</button>
+    </div>
+    <div class="qr-reader-wrap">
+      <div id="qr-reader"></div>
+      <div id="scanCheckmark" class="scan-checkmark">
+        <svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="10" fill="var(--teal)" stroke="none"/>
+          <path d="M7 12.5l3 3 7-7"/>
+        </svg>
+      </div>
+    </div>
+    <div id="scanFeedback" class="scan-feedback mono"></div>
+    <div class="small-note" style="margin-top:10px;">
+      Point your camera at an item's QR label. Scanned items are added to your cart automatically —
+      keep scanning to add more.
+    </div>
+    <button class="btn btn-teal btn-full" id="scannerDone" type="button">Done Scanning → View Cart</button>
+  </div>
+</div>
+
+<div id="return-overlay">
+  <div id="return-box">
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+      <h3 style="margin:0; font-size:15px;">Return Items</h3>
+      <button class="link-btn" id="closeReturnOverlay">✕ close</button>
+    </div>
+    <div class="small-note" id="returnOverlayMsg" style="margin-bottom:10px;"></div>
+    <div id="returnList"></div>
+  </div>
+</div>
+
+<div id="notes-overlay">
+  <div id="notes-box">
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:2px;">
+      <h3 id="notesTitle" style="margin:0;"></h3>
+      <button class="link-btn" id="notesCloseBtn">✕ close</button>
+    </div>
+    <div class="small-note" id="notesSubtitle" style="margin-bottom:14px;"></div>
+    <div id="notesList"></div>
+    <div class="field" style="margin-top:4px;">
+      <label>Add a note</label>
+      <textarea id="notesNewText" rows="3" placeholder="Add details about this item..."></textarea>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-teal" id="notesAddBtn" style="width:100%;">Add Note</button>
+    </div>
+  </div>
+</div>
+
+<button id="cart-fab">🧾 Cart <span class="count" id="cartCount">0</span></button>
+
+<div id="cart-view">
+  <header class="top">
+    <div>
+      <div class="brand-eyebrow">Your Cart</div>
+      <div class="brand-title">Checkout</div>
+    </div>
+    <button class="link-btn" id="closeCart">← back to shopping</button>
+  </header>
+  <main>
+    <div id="cartLines"></div>
+    <div style="margin-top:16px;">
+      <div class="field"><label>Full name</label><input type="text" id="coName" placeholder="Jane Rivera"></div>
+      <div class="field"><label>Email</label><input type="email" id="coEmail" placeholder="jane@lab.org"></div>
+      <div class="indef-row">
+        <input type="checkbox" id="coIndef"> <label for="coIndef">Indefinite / consumable — no return needed</label>
+      </div>
+      <div class="field" id="returnDateField"><label>Return by</label><input type="date" id="coReturn"></div>
+      <button class="btn btn-teal btn-full" id="submitCheckout">Confirm Checkout</button>
+    </div>
+  </main>
+</div>
+
+<!-- ADMIN VIEW -->
+<!-- Deliberately no "back to checkout" control here - the shopper view is
+     only ever reached via a lab's own private share link (Labs section's 🔗
+     button), never by navigating out of the admin panel. -->
+<div id="admin-view">
+  <header class="top">
+    <div>
+      <div class="brand-eyebrow">Admin</div>
+      <div class="brand-title" id="adminBrandTitle">Inventory & Checkout Log</div>
+    </div>
+  </header>
+  <main>
+    <div class="admin-layout">
+      <nav class="admin-sidebar" id="adminSidebar">
+        <div class="admin-lab-switcher" id="adminLabSwitcher">
+          <label class="admin-lab-switcher-label" for="adminLabSwitchSelect">Managing</label>
+          <select id="adminLabSwitchSelect" class="mono"></select>
+          <div class="admin-lab-switcher-single" id="adminLabSwitcherSingle" style="display:none;"></div>
+        </div>
+        <div class="admin-sidebar-divider"></div>
+        <button class="admin-nav-btn" type="button" data-target="addItem">Add Item</button>
+        <button class="admin-nav-btn" type="button" data-target="adminAccounts">Admin Accounts</button>
+        <button class="admin-nav-btn" type="button" id="companyInvNavBtn" data-target="companyInventory" style="display:none;">Company Inventory</button>
+        <button class="admin-nav-btn" type="button" data-target="assignSupplies">Assign Supplies</button>
+        <button class="admin-nav-btn" type="button" data-target="checkoutLog">Checkout Log</button>
+        <button class="admin-nav-btn" type="button" data-target="inventory">Inventory</button>
+        <button class="admin-nav-btn" type="button" id="auditLogNavBtn" data-target="auditLog" style="display:none;">Classified Access Log</button>
+        <button class="admin-nav-btn" type="button" data-target="labs">Labs</button>
+        <button class="admin-nav-btn" type="button" data-target="qrAccess">QR Access</button>
+        <div class="admin-sidebar-divider"></div>
+        <div class="admin-user-info" id="adminUserInfo"></div>
+        <button class="admin-changepw-btn" type="button" id="changePwBtn">Change Password</button>
+        <button class="admin-signout-btn" type="button" id="signOutBtn">Sign Out</button>
+      </nav>
+
+      <div class="admin-content">
+
+        <div class="admin-section" data-admin-section="addItem">
+          <h2>Add Item</h2>
+          <div class="admin-grid-form" style="grid-template-columns:2fr 1fr 1fr 1fr auto;">
+            <input type="text" id="newName" placeholder="Item name" class="mono">
+            <input type="text" id="newCat" placeholder="Category" class="mono">
+            <input type="number" id="newQty" placeholder="Qty" class="mono">
+            <select id="newClassification" class="mono" title="Only visible to admins holding clearance for this tier in this lab.">
+              <option value="standard">Standard</option>
+              <option value="black">Black</option>
+              <option value="ultraBlack">Ultra Black</option>
+            </select>
+            <button class="btn btn-teal" id="addItemBtn">Add</button>
+          </div>
+          <div id="newSerialWrap" style="display:none; margin:-4px 0 14px;">
+            <input type="text" id="newSerial" placeholder="Serial number / device ID" class="mono" style="width:100%; max-width:340px;">
+          </div>
+          <div class="small-note">Category is a free-text label (e.g. "Multimeters", "Cabling", "Consumables") used for the filter chips. Black/Ultra Black items are invisible to anyone (including other admins and superadmins) who hasn't been individually granted clearance for this lab at that tier from Admin Accounts — and you need your own clearance to create one. Black/Ultra Black items also get an optional serial number field, for individually-tracked devices rather than bulk consumables.</div>
+        </div>
+
+        <div class="admin-section" data-admin-section="adminAccounts" id="adminAccountsSection">
+          <h2>Admin Accounts</h2>
+          <div class="small-note" style="margin-bottom:12px;">Superadmins can manage every lab, the labs list, and this account list. Lab-admins are limited to the labs assigned to them here.</div>
+          <div id="adminAccountsList" style="display:flex; flex-direction:column; gap:8px; margin-bottom:16px;"></div>
+
+          <div class="small-note mono" id="adminFormTitle" style="margin-bottom:8px; text-transform:uppercase; letter-spacing:.05em;">Add a new admin account</div>
+          <div class="admin-grid-form" style="grid-template-columns:1fr 1fr 1fr 1fr;">
+            <input type="text" id="newAdminUsername" placeholder="Username" class="mono">
+            <input type="password" id="newAdminPassword" placeholder="Password (6+ chars)" class="mono">
+            <input type="email" id="newAdminEmail" placeholder="Email (for low-stock alerts)" class="mono">
+            <select id="newAdminRole" class="mono">
+              <option value="labadmin">Lab-admin</option>
+              <option value="superadmin">Superadmin</option>
+            </select>
+          </div>
+          <div id="newAdminLabsPicker" style="margin:4px 0 14px;"></div>
+          <div style="display:flex; gap:8px;">
+            <button class="btn btn-teal" id="addAdminBtn" type="button" style="flex:1">Create Admin Account</button>
+            <button class="btn btn-ghost" id="cancelEditAdminBtn" type="button" style="display:none;">Cancel</button>
+          </div>
+        </div>
+
+        <div class="admin-section" data-admin-section="companyInventory">
+          <h2>Company Inventory (<span id="companyInvCount">0</span> items across <span id="companyInvLabCount">0</span> labs)<button class="btn btn-ghost" id="companyInvRefreshBtn" type="button" style="margin-left:auto;">↻ Refresh</button></h2>
+          <div class="small-note" style="margin-bottom:12px;">Every item across every lab you can see, in one list. Same clearance rules as opening each lab directly — a lab or item you're not cleared for still won't show up here. Read-only; use "Manage" to jump into a lab and make changes there.</div>
+          <input type="text" id="companyInvSearch" class="mono" placeholder="search by item, category, or lab…" style="width:100%;max-width:320px;margin-bottom:12px;">
+          <table id="companyInvTable">
+            <colgroup>
+              <col style="width:26%;">
+              <col style="width:16%;">
+              <col style="width:110px;">
+              <col style="width:100px;">
+              <col style="width:100px;">
+              <col style="width:100px;">
+            </colgroup>
+            <thead><tr><th>Item</th><th>Category</th><th>Total Qty</th><th>Checked Out</th><th>Available</th><th></th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+
+        <div class="admin-section" data-admin-section="assignSupplies">
+          <h2>Assign Supplies</h2>
+          <div class="small-note" style="margin-bottom:14px;">
+            Log supplies that were checked out before this system existed, or check items out on someone's
+            behalf (phone/email request, etc). If email notifications are configured, the person gets a
+            confirmation email either way.
+          </div>
+
+          <div class="admin-grid-form" style="grid-template-columns:2fr 1fr auto;">
+            <select id="assignItemSelect" class="mono"></select>
+            <input type="number" id="assignQty" min="1" value="1" class="mono" placeholder="Qty">
+            <button class="btn btn-teal" id="assignAddBtn" type="button">Add</button>
+          </div>
+          <div id="assignLines" style="margin-bottom:6px;"></div>
+
+          <div class="field"><label>Full name</label><input type="text" id="assignName" placeholder="Jane Rivera"></div>
+          <div class="field"><label>Email</label><input type="email" id="assignEmail" placeholder="jane@lab.org"></div>
+          <div class="field"><label>Checked out on</label><input type="date" id="assignDate"></div>
+          <div class="indef-row">
+            <input type="checkbox" id="assignIndef"> <label for="assignIndef">Indefinite / consumable — no return needed</label>
+          </div>
+          <div class="field" id="assignReturnField"><label>Return by</label><input type="date" id="assignReturn"></div>
+
+          <button class="btn btn-teal btn-full" id="assignSubmitBtn" type="button">Assign Items</button>
+        </div>
+
+        <div class="admin-section" data-admin-section="checkoutLog">
+          <h2>Checkout Log</h2>
+          <input type="text" id="logSearch" class="mono" placeholder="search by name or email…" style="width:100%;max-width:280px;margin-bottom:10px;">
+          <div class="chipbar" style="margin-bottom:12px;">
+            <div class="chip active" data-logfilter="all">all</div>
+            <div class="chip" data-logfilter="active">active</div>
+            <div class="chip" data-logfilter="overdue">overdue</div>
+            <div class="chip" data-logfilter="returned">returned</div>
+          </div>
+          <table id="logTable"><thead><tr><th>Who</th><th>Status</th><th></th></tr></thead><tbody></tbody></table>
+        </div>
+
+        <div class="admin-section" data-admin-section="inventory">
+          <h2>Inventory (<span id="invCount">0</span> items)<button class="btn btn-ghost" id="printAllLabelsBtn" type="button" style="margin-left:auto;">🖨 Print All Labels</button></h2>
+          <table id="invTable">
+            <colgroup>
+              <col style="width:24%;">
+              <col style="width:120px;">
+              <col style="width:110px;">
+              <col style="width:120px;">
+              <col style="width:120px;">
+              <col style="width:110px;">
+              <col style="width:90px;">
+            </colgroup>
+            <thead><tr><th>Name</th><th>Notes</th><th>Total Qty</th><th>Checked Out</th><th>Alert At</th><th>QR</th><th></th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+
+        <div class="admin-section" data-admin-section="labs">
+          <h2>Labs</h2>
+          <div class="small-note" style="margin-bottom:12px;">Switch which lab you're managing, or (if you're a superadmin) add/remove labs from the list. You can rename or set a passcode on any lab you're assigned to.</div>
+          <div id="adminLabList" style="display:flex; flex-direction:column; gap:8px; margin-bottom:14px;"></div>
+          <div class="admin-grid-form" id="adminAddLabForm" style="grid-template-columns:2fr auto;">
+            <input type="text" id="adminNewLabName" placeholder="New lab name" class="mono">
+            <button class="btn btn-teal" id="adminAddLabBtn" type="button">Add Lab</button>
+          </div>
+        </div>
+
+        <div class="admin-section" data-admin-section="auditLog">
+          <h2>Classified Access Log</h2>
+          <div class="small-note" style="margin-bottom:12px;">Every create/edit/delete of a Black or Ultra Black item in this lab, with who did it and when. Visible only to admins holding some clearance in this lab — same gate as seeing the items themselves.</div>
+          <div id="auditLogList"></div>
+        </div>
+
+        <div class="admin-section" data-admin-section="qrAccess">
+          <h2>QR Access</h2>
+          <div class="qr-box">
+            <img id="qrImg" width="160" height="160" alt="QR code linking to this checkout page">
+            <div class="small-note">
+              This QR encodes this page's live URL. Print or post it near the supply shelf so your team can scan
+              straight into the checkout screen.
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </main>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<div id="modal-overlay">
+  <div id="modal-box">
+    <h3 id="modalTitle"></h3>
+    <p id="modalMsg"></p>
+    <input type="password" id="modalInput" style="display:none;">
+    <textarea id="modalTextarea" rows="5" style="display:none;"></textarea>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" id="modalCancel">Cancel</button>
+      <button class="btn btn-teal" id="modalOk">OK</button>
+    </div>
+  </div>
+</div>
+
+<div id="login-overlay">
+  <div id="login-box">
+    <h3 id="loginTitle">Admin Login</h3>
+    <p id="loginMsg"></p>
+    <input type="text" id="loginUsername" class="mono" placeholder="username" autocomplete="username">
+    <input type="password" id="loginPassword" class="mono" placeholder="password" autocomplete="current-password">
+    <input type="email" id="loginEmail" class="mono" placeholder="your email (optional, for low-stock alerts)" style="display:none;">
+    <input type="password" id="loginMasterPasscode" class="mono" placeholder="master passcode" style="display:none;">
+    <div class="small-note" id="loginError" style="color:var(--red); display:none; margin:-8px 0 14px;"></div>
+    <button type="button" class="link-btn" id="loginForgotBtn" style="font-size:12.5px; margin:-6px 0 14px; display:block;">Forgot password?</button>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" id="loginCancel">Cancel</button>
+      <button class="btn btn-teal" id="loginSubmit">Log in</button>
+    </div>
+  </div>
+</div>
+
+<div id="pw-overlay">
+  <div id="pw-box">
+    <h3 id="pwTitle">Change Password</h3>
+    <p id="pwMsg"></p>
+    <input type="password" id="pwCurrent" class="mono" placeholder="current password" autocomplete="current-password">
+    <input type="password" id="pwNew" class="mono" placeholder="new password (6+ characters)" autocomplete="new-password">
+    <input type="password" id="pwConfirm" class="mono" placeholder="confirm new password" autocomplete="new-password">
+    <div class="small-note" id="pwError" style="color:var(--red); display:none; margin:-8px 0 14px;"></div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" id="pwCancel">Cancel</button>
+      <button class="btn btn-teal" id="pwSubmit">Save</button>
+    </div>
+  </div>
+</div>
+
+<script>
+let inventory = [];   // {id, name, category, qty, notes}
+let checkouts = [];   // {id, name, email, returnDate|null, indefinite, createdAt, items:[{itemId,name,qty,returned}]}
+let checkedOutIndex = new Map(); // itemId -> outstanding qty, derived from `checkouts` - see reindexCheckouts()
+let cart = [];         // {itemId, name, qty}
+let activeCategory = "all";
+let searchTerm = "";
+let adminUnlocked = false;
+let adminUser = null;   // {id, username, role, labs} once logged in
+let adminToken = null;  // signed session token from admin-auth
+// currentLab.accessToken is the unguessable, vendor-facing credential -
+// present whenever we know it (resolved from a `?lab=` link, or from an
+// authenticated admin's own lab listing, which now includes it). The raw
+// `id` only ever resolves server-side for an admin already scoped to that
+// lab (see lib/lab-registry.mjs's resolveLab) - anonymous shopper traffic
+// has no other way in, by design, so every URL below prefers the token and
+// only falls back to the id for the admin-bookmark case where we haven't
+// loaded the token yet.
+let currentLab = { id: null, name: null, accessToken: null, locked: false };
+let labPasscode = "";
+
+function labUrlParam(){ return currentLab.accessToken || currentLab.id || ''; }
+function invUrl(){ return '/.netlify/functions/inventory?lab=' + encodeURIComponent(labUrlParam()); }
+function checkoutsUrl(){ return '/.netlify/functions/checkouts?lab=' + encodeURIComponent(labUrlParam()); }
+
+function clearAdminSession(){
+  adminUnlocked = false;
+  adminUser = null;
+  adminToken = null;
+  localStorage.removeItem('adminToken');
+}
+
+function handleAdminApiError(err, fallbackMsg){
+  if(err.message === 'unauthorized'){
+    clearAdminSession();
+    showToast('Session expired — please log in again');
+  } else if(err.message === 'forbidden'){
+    showToast(err.detail || "You don't have access to this lab");
+  } else if(err.detail){
+    showToast(err.detail);
+  } else {
+    // No usable message from the server (a platform-level error page rather
+    // than our own JSON, or the connection dropped) - the real detail is
+    // already in the console via apiWrite's logging. Including the status
+    // code here at least gives something concrete to report back rather
+    // than a completely opaque "something went wrong" every time.
+    showToast((fallbackMsg || 'Something went wrong') + (err.status ? ` (HTTP ${err.status})` : ''));
+  }
+}
+
+async function whoami(token){
+  try{
+    const res = await fetch('/.netlify/functions/admin-auth', {
+      method:'POST',
+      headers:{'content-type':'application/json', 'x-admin-token': token},
+      body: JSON.stringify({action:'whoami'}),
+      cache:'no-store'
+    });
+    if(!res.ok) return null;
+    const data = await res.json();
+    return data.admin || null;
+  }catch(e){ return null; }
+}
+
+function showLoginModal(){
+  return new Promise(async (resolve)=>{
+    const overlay = document.getElementById('login-overlay');
+    const title = document.getElementById('loginTitle');
+    const msg = document.getElementById('loginMsg');
+    const userInput = document.getElementById('loginUsername');
+    const passInput = document.getElementById('loginPassword');
+    const emailInput = document.getElementById('loginEmail');
+    const masterInput = document.getElementById('loginMasterPasscode');
+    const errorBox = document.getElementById('loginError');
+    const submitBtn = document.getElementById('loginSubmit');
+    const cancelBtn = document.getElementById('loginCancel');
+    const forgotBtn = document.getElementById('loginForgotBtn');
+
+    const box = document.getElementById('login-box');
+    userInput.value = ''; passInput.value = ''; emailInput.value = ''; masterInput.value = '';
+    errorBox.style.display = 'none'; errorBox.textContent = '';
+    userInput.classList.remove('input-error');
+    passInput.classList.remove('input-error');
+    masterInput.classList.remove('input-error');
+    function clearFieldError(){
+      userInput.classList.remove('input-error');
+      passInput.classList.remove('input-error');
+      masterInput.classList.remove('input-error');
+    }
+    function flagError(){
+      userInput.classList.add('input-error');
+      passInput.classList.add('input-error');
+      if(!hasAdmins) masterInput.classList.add('input-error');
+      box.classList.remove('shake');
+      void box.offsetWidth;
+      box.classList.add('shake');
+    }
+    userInput.addEventListener('input', clearFieldError);
+    passInput.addEventListener('input', clearFieldError);
+    masterInput.addEventListener('input', clearFieldError);
+
+    let hasAdmins = true;
+    try{
+      const res = await fetch('/.netlify/functions/admin-auth', { cache:'no-store' });
+      const data = await res.json();
+      hasAdmins = !!data.hasAdmins;
+    }catch(e){ hasAdmins = true; }
+
+    if(hasAdmins){
+      title.textContent = 'Admin Login';
+      msg.textContent = 'Enter your admin username and password.';
+      masterInput.style.display = 'none';
+      emailInput.style.display = 'none';
+      forgotBtn.style.display = 'block';
+    } else {
+      title.textContent = 'Set Up Admin Account';
+      msg.textContent = 'No admin accounts exist yet. Enter the master passcode plus a username and password to create the first superadmin account.';
+      masterInput.style.display = 'block';
+      emailInput.style.display = 'block';
+      forgotBtn.style.display = 'none'; // nothing to reset yet - no accounts exist
+    }
+
+    const submitLabel = hasAdmins ? 'Log in' : 'Create account';
+    submitBtn.textContent = submitLabel;
+    submitBtn.disabled = false;
+
+    overlay.classList.add('open');
+    setTimeout(()=>userInput.focus(), 50);
+
+    function cleanup(result){
+      overlay.classList.remove('open');
+      box.classList.remove('shake');
+      submitBtn.removeEventListener('click', onSubmit);
+      cancelBtn.removeEventListener('click', onCancel);
+      forgotBtn.removeEventListener('click', onForgot);
+      passInput.removeEventListener('keydown', onKey);
+      masterInput.removeEventListener('keydown', onKey);
+      userInput.removeEventListener('input', clearFieldError);
+      passInput.removeEventListener('input', clearFieldError);
+      masterInput.removeEventListener('input', clearFieldError);
+      resolve(result);
+    }
+
+    async function onSubmit(){
+      errorBox.style.display = 'none';
+      const username = userInput.value.trim();
+      const password = passInput.value;
+      if(!username || !password){
+        errorBox.textContent = 'Username and password required';
+        errorBox.style.display = 'block';
+        flagError();
+        return;
+      }
+      submitBtn.disabled = true;
+      submitBtn.textContent = hasAdmins ? 'Logging in…' : 'Creating…';
+      try{
+        const payload = hasAdmins
+          ? { action:'login', username, password }
+          : { action:'bootstrap', username, password, email: emailInput.value.trim(), masterPasscode: masterInput.value };
+        const res = await fetch('/.netlify/functions/admin-auth', {
+          method:'POST', headers:{'content-type':'application/json'},
+          body: JSON.stringify(payload), cache:'no-store'
+        });
+        const data = await res.json();
+        if(!res.ok){
+          errorBox.textContent = data.error || 'Login failed';
+          errorBox.style.display = 'block';
+          flagError();
+          submitBtn.disabled = false;
+          submitBtn.textContent = submitLabel;
+          return;
+        }
+        adminToken = data.token;
+        adminUser = data.admin;
+        adminUnlocked = true;
+        localStorage.setItem('adminToken', adminToken);
+        cleanup(true);
+      }catch(e){
+        errorBox.textContent = 'Something went wrong';
+        errorBox.style.display = 'block';
+        flagError();
+        submitBtn.disabled = false;
+        submitBtn.textContent = submitLabel;
+      }
+    }
+    function onCancel(){ cleanup(false); }
+    function onKey(e){ if(e.key==='Enter') onSubmit(); }
+    // Closes the login modal first (without resolving it as a successful
+    // login) and hands off to the separate forgot-password prompt - kept as
+    // its own flow rather than crammed into this modal since it needs a
+    // completely different field set (just a username) and a different
+    // follow-up action.
+    function onForgot(){
+      cleanup(false);
+      promptForgotPassword();
+    }
+
+    submitBtn.addEventListener('click', onSubmit);
+    cancelBtn.addEventListener('click', onCancel);
+    forgotBtn.addEventListener('click', onForgot);
+    passInput.addEventListener('keydown', onKey);
+    masterInput.addEventListener('keydown', onKey);
+  });
+}
+
+// Standalone (not part of the login modal's own promise chain) since it can
+// also be reached directly from a stale/invalid `?resetToken=` link (see
+// init()) without a login attempt ever happening first.
+async function promptForgotPassword(){
+  const username = await showModal({
+    title: 'Forgot Password',
+    msg: "Enter your admin username. If the account has an email on file, we'll send a reset link to it.",
+    isPassword: true, inputType: 'text', okText: 'Send Reset Link'
+  });
+  if(!username || !username.trim()) return;
+  try{
+    const res = await fetch('/.netlify/functions/admin-auth', {
+      method: 'POST', headers: {'content-type':'application/json'},
+      body: JSON.stringify({ action: 'requestPasswordReset', username: username.trim() }),
+      cache: 'no-store'
+    });
+    const data = await res.json().catch(()=> ({}));
+    // Backend deliberately returns the same message whether or not the
+    // account/email actually exists (see admin-auth.mjs) - shown verbatim
+    // rather than re-worded here so there's exactly one place that generic
+    // copy lives.
+    showToast(data.message || 'If that account exists, a password reset link has been sent to its email address.');
+  }catch(e){
+    showToast('Could not reach the server — please try again');
+  }
+}
+
+// Shared modal for both "change my password" (signed in, requires current
+// password) and "set a new password" (via emailed reset link, the token
+// itself proves identity so no current-password field is shown). Uses a raw
+// fetch rather than apiWrite() deliberately, same reasoning as the login
+// modal above: a 401 here carries a specific, real message ("current
+// password is incorrect" / "this reset link is invalid, expired, or already
+// used") that apiWrite's shared 401 handling treats as a generic session
+// expiry and discards.
+function openPasswordModal({ mode, token }){
+  return new Promise((resolve)=>{
+    const overlay = document.getElementById('pw-overlay');
+    const box = document.getElementById('pw-box');
+    const title = document.getElementById('pwTitle');
+    const msg = document.getElementById('pwMsg');
+    const currentInput = document.getElementById('pwCurrent');
+    const newInput = document.getElementById('pwNew');
+    const confirmInput = document.getElementById('pwConfirm');
+    const errorBox = document.getElementById('pwError');
+    const cancelBtn = document.getElementById('pwCancel');
+    const submitBtn = document.getElementById('pwSubmit');
+
+    const isReset = mode === 'reset';
+    currentInput.value = ''; newInput.value = ''; confirmInput.value = '';
+    errorBox.style.display = 'none'; errorBox.textContent = '';
+    [currentInput, newInput, confirmInput].forEach(i => i.classList.remove('input-error'));
+
+    title.textContent = isReset ? 'Set New Password' : 'Change Password';
+    msg.textContent = isReset
+      ? 'Choose a new password for your admin account.'
+      : 'Enter your current password and a new one.';
+    currentInput.style.display = isReset ? 'none' : 'block';
+    // The reset-link flow isn't reached from anywhere with a sensible
+    // "cancel back to" state (it's the whole point of the page load), so
+    // there's no cancel option there - closing the tab is the cancel.
+    cancelBtn.style.display = isReset ? 'none' : '';
+    submitBtn.textContent = 'Save';
+    submitBtn.disabled = false;
+
+    overlay.classList.add('open');
+    setTimeout(()=> (isReset ? newInput : currentInput).focus(), 50);
+
+    function flagError(text){
+      errorBox.textContent = text;
+      errorBox.style.display = 'block';
+      box.classList.remove('shake');
+      void box.offsetWidth;
+      box.classList.add('shake');
+    }
+
+    function cleanup(result){
+      overlay.classList.remove('open');
+      box.classList.remove('shake');
+      submitBtn.removeEventListener('click', onSubmit);
+      cancelBtn.removeEventListener('click', onCancel);
+      newInput.removeEventListener('keydown', onKey);
+      confirmInput.removeEventListener('keydown', onKey);
+      resolve(result);
+    }
+
+    async function onSubmit(){
+      errorBox.style.display = 'none';
+      const newPassword = newInput.value;
+      const confirmValue = confirmInput.value;
+      if(!isReset && !currentInput.value){
+        flagError('Current password required');
+        return;
+      }
+      if(!newPassword || newPassword.length < 6){
+        flagError('New password must be 6+ characters');
+        return;
+      }
+      if(newPassword !== confirmValue){
+        flagError('Passwords do not match');
+        return;
+      }
+      submitBtn.disabled = true;
+      submitBtn.textContent = 'Saving…';
+      try{
+        const payload = isReset
+          ? { action: 'resetPassword', token, newPassword }
+          : { action: 'changePassword', currentPassword: currentInput.value, newPassword };
+        const headers = { 'content-type': 'application/json' };
+        if(!isReset && adminToken) headers['x-admin-token'] = adminToken;
+        const res = await fetch('/.netlify/functions/admin-auth', {
+          method: 'POST', headers, body: JSON.stringify(payload), cache: 'no-store'
+        });
+        const data = await res.json().catch(()=> ({}));
+        if(!res.ok){
+          flagError(data.error || 'Something went wrong');
+          submitBtn.disabled = false;
+          submitBtn.textContent = 'Save';
+          return;
+        }
+        if(isReset){
+          adminToken = data.token;
+          adminUser = data.admin;
+          adminUnlocked = true;
+          localStorage.setItem('adminToken', adminToken);
+          showToast('Password set — you are signed in');
+        } else {
+          showToast('Password updated');
+        }
+        cleanup(true);
+      }catch(e){
+        flagError('Could not reach the server — please try again');
+        submitBtn.disabled = false;
+        submitBtn.textContent = 'Save';
+      }
+    }
+    function onCancel(){ cleanup(false); }
+    function onKey(e){ if(e.key==='Enter') onSubmit(); }
+
+    submitBtn.addEventListener('click', onSubmit);
+    cancelBtn.addEventListener('click', onCancel);
+    newInput.addEventListener('keydown', onKey);
+    confirmInput.addEventListener('keydown', onKey);
+  });
+}
+
+function showChangePasswordModal(){ return openPasswordModal({ mode: 'change' }); }
+function showSetNewPasswordModal(token){ return openPasswordModal({ mode: 'reset', token }); }
+
+async function ensureAdminUnlocked(){
+  if(adminUser) return true;
+  const savedToken = localStorage.getItem('adminToken');
+  if(savedToken){
+    const who = await whoami(savedToken);
+    if(who){
+      adminToken = savedToken;
+      adminUser = who;
+      adminUnlocked = true;
+      return true;
+    }
+    localStorage.removeItem('adminToken');
+  }
+  return await showLoginModal();
+}
+
+// Coalesces bursts of calls (e.g. every keystroke in a search box) into one
+// call `wait` ms after the last one, instead of doing a full re-render per
+// keystroke.
+function debounce(fn, wait){
+  let t;
+  return (...args)=>{
+    clearTimeout(t);
+    t = setTimeout(()=>fn(...args), wait);
+  };
+}
+
+function escapeAttr(str){
+  return String(str ?? '').replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+/* ---- category colors: deterministic so the same category name always
+   gets the same color, no manual assignment needed ---- */
+function hexToRgb(hex){
+  const h = hex.replace('#','');
+  const n = parseInt(h.length===3 ? h.split('').map(c=>c+c).join('') : h, 16);
+  return { r:(n>>16)&255, g:(n>>8)&255, b:n&255 };
+}
+// Tints are a translucent wash of the solid color rather than a fixed pastel
+// hex, so they read correctly on both a light page and a dark card.
+function tintFor(hex, alpha=0.16){
+  const {r,g,b} = hexToRgb(hex);
+  return `rgba(${r},${g},${b},${alpha})`;
+}
+const CATEGORY_SOLIDS = ['#2f7d6b','#b5643a','#5b6fbd','#a13f6b','#3f8f4f','#c0862a','#3f8fa1','#8a5fc7','#bd4f4f','#5c7a3f'];
+const CATEGORY_PALETTE = CATEGORY_SOLIDS.map(solid => ({ solid, tint: tintFor(solid) }));
+const CATEGORY_NEUTRAL = { solid:'#8a8f8d', tint: tintFor('#8a8f8d') };
+function categoryColor(cat){
+  const key = (cat || '').trim().toLowerCase();
+  if(!key) return CATEGORY_NEUTRAL;
+  let h = 0;
+  for(let i=0;i<key.length;i++){ h = (h*31 + key.charCodeAt(i)) >>> 0; }
+  return CATEGORY_PALETTE[h % CATEGORY_PALETTE.length];
+}
+
+function showToast(msg){
+  const t = document.getElementById('toast');
+  t.textContent = msg; t.classList.add('show');
+  setTimeout(()=>t.classList.remove('show'), 2200);
+}
+
+/* ---- custom modal (native prompt/confirm don't fit this UI) ---- */
+// This modal is shared/reused for every confirm+prompt in the app, so it's
+// possible to trigger a second call (e.g. clicking a delete button twice)
+// before the first one has resolved. Without this guard, each overlapping
+// call binds its own click listeners onto the same static #modalOk/#modalCancel
+// buttons, so a single later click fires every still-pending onOk() at once -
+// e.g. double-submitting the same delete/save. Track the one active prompt's
+// cleanup and cancel it before a new one takes over the shared DOM.
+let closeActiveModalPrompt = null;
+function showModal({title, msg, isPassword=false, inputType='password', okText='OK', isError=false, defaultValue='', multiline=false}){
+  if(closeActiveModalPrompt) closeActiveModalPrompt();
+  return new Promise((resolve)=>{
+    const overlay = document.getElementById('modal-overlay');
+    const box = document.getElementById('modal-box');
+    const input = document.getElementById('modalInput');
+    const textarea = document.getElementById('modalTextarea');
+    // multiline uses the textarea (for anything expected to run more than
+    // one line, like item notes); everything else keeps the single-line
+    // input it always used.
+    const field = multiline ? textarea : input;
+    const otherField = multiline ? input : textarea;
+    const showField = isPassword || multiline;
+    const msgEl = document.getElementById('modalMsg');
+    document.getElementById('modalTitle').textContent = title;
+    msgEl.textContent = msg || '';
+    msgEl.style.display = msg ? 'block' : 'none';
+    msgEl.classList.toggle('modal-msg-error', isError);
+    if(!multiline) input.type = inputType;
+    field.style.display = showField ? 'block' : 'none';
+    otherField.style.display = 'none';
+    field.value = defaultValue || '';
+    field.classList.toggle('input-error', isError);
+    document.getElementById('modalOk').textContent = okText;
+    overlay.classList.add('open');
+    if(isError){
+      box.classList.remove('shake');
+      void box.offsetWidth; // restart animation even on repeated failures
+      box.classList.add('shake');
+    }
+    if(showField) setTimeout(()=>{ field.focus(); if(!multiline) field.select(); }, 50);
+
+    function clearError(){ field.classList.remove('input-error'); }
+    function cleanup(result){
+      overlay.classList.remove('open');
+      box.classList.remove('shake');
+      okBtn.removeEventListener('click', onOk);
+      cancelBtn.removeEventListener('click', onCancel);
+      input.removeEventListener('keydown', onKey);
+      field.removeEventListener('input', clearError);
+      closeActiveModalPrompt = null;
+      resolve(result);
+    }
+    const okBtn = document.getElementById('modalOk');
+    const cancelBtn = document.getElementById('modalCancel');
+    function onOk(){ cleanup(showField ? field.value : true); }
+    function onCancel(){ cleanup(null); }
+    // Enter-to-submit only makes sense for the single-line input - in the
+    // textarea, Enter should just start a new line.
+    function onKey(e){ if(e.key==='Enter') onOk(); }
+    okBtn.addEventListener('click', onOk);
+    cancelBtn.addEventListener('click', onCancel);
+    input.addEventListener('keydown', onKey);
+    field.addEventListener('input', clearError);
+    closeActiveModalPrompt = ()=> cleanup(null);
+  });
+}
+
+/* ---- API ---- */
+function authHeaders(admin=false){
+  const headers = {};
+  if(labPasscode) headers['x-lab-passcode'] = labPasscode;
+  if((admin || adminUnlocked) && adminToken) headers['x-admin-token'] = adminToken;
+  return headers;
+}
+async function apiGet(path){
+  const res = await fetch(path, { cache: 'no-store', headers: authHeaders() });
+  if(res.status === 401){ throw new Error('unauthorized'); }
+  if(!res.ok) throw new Error('fetch failed');
+  return res.json();
+}
+async function apiWrite(path, method, body, admin=false){
+  const headers = {'content-type':'application/json', ...authHeaders(admin)};
+  let res;
+  try{
+    res = await fetch(path, { method, headers, body: JSON.stringify(body||{}), cache: 'no-store' });
+  }catch(networkErr){
+    // fetch itself threw - no response at all (offline, DNS, CORS, the
+    // connection dropped mid-request, etc). This is the one failure mode
+    // where we truly have nothing from the server to show, but it's still
+    // worth logging so a report of "something went wrong" comes with a
+    // concrete trail in devtools instead of nothing.
+    console.error(`apiWrite: network failure on ${method} ${path}`, networkErr);
+    const err = new Error('network failure');
+    err.detail = 'Could not reach the server - check your connection and try again';
+    throw err;
+  }
+  if(res.status === 401){ throw new Error('unauthorized'); }
+  if(res.status === 403){
+    const err = new Error('forbidden');
+    try{ const b = await res.json(); err.detail = b.error; }catch(e){}
+    throw err;
+  }
+  if(!res.ok){
+    // Always capture *something* diagnosable here, even if the error body
+    // isn't the JSON shape we expect (a platform-level 500/502/timeout page
+    // won't be) - so a future "something went wrong" report comes with a
+    // real status code and response body in the console instead of nothing
+    // to go on.
+    const err = new Error('request failed');
+    err.status = res.status;
+    const rawText = await res.text().catch(()=> '');
+    // Two different JSON shapes can land here: our own coded errors (400/
+    // 403/409) put the real user-facing message directly in `.error`, e.g.
+    // {error: "not enough stock"}. The generic crash boundary (500) puts a
+    // fixed label in `.error` ("internal error") and the *actual* underlying
+    // exception message in `.detail` - prefer that when it's present, or the
+    // toast just shows the unhelpful fixed label instead of what really
+    // broke.
+    try{
+      const parsed = JSON.parse(rawText);
+      err.detail = parsed.detail || parsed.error;
+    }catch(e){}
+    console.error(`apiWrite: ${method} ${path} -> ${res.status}`, rawText.slice(0, 500));
+    throw err;
+  }
+  return res.json();
+}
+
+// Rebuilds the itemId -> outstanding-qty index from the current `checkouts`
+// array. Call this every time `checkouts` is reassigned. One pass over every
+// checkout (O(checkouts)) buys every subsequent checkedOutQty() call an O(1)
+// map lookup instead of re-scanning the whole checkout log - the difference
+// between rendering the grid in O(items) vs O(items x checkouts), which is
+// what was actually happening before: every rendered item, on every render,
+// rescanned every checkout ever made against this lab.
+function reindexCheckouts(){
+  checkedOutIndex = new Map();
+  for(const c of checkouts){
+    for(const it of (c.items||[])){
+      if(it.returned) continue;
+      checkedOutIndex.set(it.itemId, (checkedOutIndex.get(it.itemId)||0) + it.qty);
+    }
+  }
+}
+
+// Tracked separately from `inventory`/`checkouts` themselves so a failed
+// refresh can be told apart from a lab that's genuinely empty - see
+// renderGrid() below. This was the direct cause of "checkout page not
+// loading inventory" reports with zero diagnostic signal: any fetch
+// failure here (bad/expired lab link, network hiccup, a backend error)
+// used to be swallowed silently by Promise.allSettled, resetting the grid
+// to empty with nothing on screen to explain why.
+let inventoryLoadFailed = false;
+let checkoutsLoadFailed = false;
+
+async function loadData(){
+  // Fetch inventory and checkouts in parallel instead of one after the
+  // other - same two round trips, half the wall-clock wait before the page
+  // has anything to render.
+  const [invResult, coResult] = await Promise.allSettled([apiGet(invUrl()), apiGet(checkoutsUrl())]);
+
+  if(invResult.status === 'fulfilled'){
+    inventory = invResult.value;
+    inventoryLoadFailed = false;
+  } else {
+    // Keep whatever was already loaded rather than wiping the grid to
+    // empty - a transient failure should look like "couldn't refresh",
+    // never like the lab silently lost all its inventory.
+    inventoryLoadFailed = true;
+    console.error('loadData: failed to fetch inventory for this lab', invResult.reason);
+  }
+
+  if(coResult.status === 'fulfilled'){
+    checkouts = coResult.value;
+    checkoutsLoadFailed = false;
+  } else {
+    checkoutsLoadFailed = true;
+    console.error('loadData: failed to fetch checkouts for this lab', coResult.reason);
+  }
+  reindexCheckouts();
+
+  if(inventoryLoadFailed || checkoutsLoadFailed){
+    showToast("Couldn't load the latest data - check your connection and try again");
+  }
+}
+
+function checkedOutQty(itemId){
+  return checkedOutIndex.get(itemId) || 0;
+}
+function availableQty(item){
+  return Math.max(0, item.qty - checkedOutQty(item.id));
+}
+
+function renderChips(){
+  const cats = ["all", ...new Set(inventory.map(i=>i.category).filter(Boolean))];
+  const bar = document.getElementById('categoryChips');
+  bar.innerHTML = "";
+  cats.forEach(c=>{
+    const chip = document.createElement('div');
+    const isActive = activeCategory===c;
+    chip.className = 'chip' + (isActive ? ' active':'');
+    chip.textContent = c === 'all' ? 'All' : c;
+    if(c !== 'all'){
+      const col = categoryColor(c);
+      if(isActive){
+        chip.style.background = col.solid;
+        chip.style.borderColor = col.solid;
+        chip.style.color = '#fff';
+      } else {
+        chip.style.background = 'var(--card)';
+        chip.style.borderColor = 'var(--border)';
+        chip.style.color = 'var(--ink-soft)';
+      }
+    }
+    chip.onclick = ()=>{ activeCategory = c; renderChips(); renderGrid(); };
+    bar.appendChild(chip);
+  });
+}
+
+function buildItemCard(item){
+  const avail = availableQty(item);
+  const card = document.createElement('div');
+  card.className = 'item-card' + (avail===0 ? ' out':'');
+  const col = categoryColor(item.category);
+  if(avail !== 0){ card.style.borderLeftColor = col.solid; }
+  card.innerHTML = `
+    <div class="item-cat mono" style="color:${col.solid}">${item.category||'uncategorized'}</div>
+    ${item.restricted ? `<div class="badge" title="Requires a release passcode at checkout" style="background:var(--red-bg); color:var(--red); margin-bottom:4px; display:inline-block;">Restricted</div>` : ''}
+    <div class="item-name">${item.name}</div>
+    ${item.notes ? `<div class="item-notes">${item.notes}</div>` : ''}
+    <div class="item-stock">
+      <span>available</span>
+      <span class="stock-num ${avail===0?'zero':''}">${avail} / ${item.qty}</span>
+    </div>
+    <div class="add-row">
+      <input type="number" class="qty-input mono" min="1" max="${avail}" value="${avail>0?1:0}" ${avail===0?'disabled':''}>
+      <button class="btn btn-teal" style="flex:1" ${avail===0?'disabled':''}>Add to cart</button>
+    </div>
+  `;
+  const qtyInput = card.querySelector('.qty-input');
+  card.querySelector('button').onclick = ()=>{
+    const q = Math.min(avail, Math.max(1, parseInt(qtyInput.value)||1));
+    addToCart(item, q);
+  };
+  return card;
+}
+
+function renderGrid(){
+  const grid = document.getElementById('itemGrid');
+  if(inventoryLoadFailed){
+    // Distinct from "no items match" below - this means the fetch itself
+    // failed, not that the lab is genuinely empty. Gives an actual retry
+    // path instead of leaving a blank/confusing grid.
+    grid.innerHTML = `
+      <div class="empty">
+        Couldn't load this lab's inventory. This is usually a connection hiccup - if you followed a
+        saved link, it's also possible that link was regenerated since it was shared.
+        <div style="margin-top:14px;">
+          <button class="btn btn-teal" id="retryLoadBtn" type="button">Try again</button>
+        </div>
+      </div>
+    `;
+    document.getElementById('retryLoadBtn').onclick = async ()=>{
+      grid.innerHTML = '<div class="loading">Retrying…</div>';
+      await loadData();
+      renderChips();
+      renderGrid();
+    };
+    return;
+  }
+  let items = inventory.filter(i=>{
+    const matchCat = activeCategory==="all" || i.category===activeCategory;
+    const matchSearch = i.name.toLowerCase().includes(searchTerm.toLowerCase());
+    return matchCat && matchSearch;
+  });
+  if(items.length===0){
+    grid.innerHTML = '<div class="empty">No items match. Ask an admin to add inventory.</div>';
+    return;
+  }
+  grid.innerHTML = "";
+
+  if(activeCategory === "all"){
+    // group by category so same-color items sit together; categories sorted
+    // alphabetically (Uncategorized last), items alphabetical within each
+    const groups = {};
+    items.forEach(i=>{
+      const cat = (i.category || '').trim() || 'Uncategorized';
+      (groups[cat] = groups[cat] || []).push(i);
+    });
+    const catNames = Object.keys(groups).sort((a,b)=>{
+      if(a==='Uncategorized') return 1;
+      if(b==='Uncategorized') return -1;
+      return a.localeCompare(b, undefined, {sensitivity:'base'});
+    });
+    catNames.forEach(cat=>{
+      const col = categoryColor(cat === 'Uncategorized' ? '' : cat);
+      const header = document.createElement('div');
+      header.className = 'grid-cat-header';
+      header.style.borderLeftColor = col.solid;
+      header.style.background = col.tint;
+      header.style.color = col.solid;
+      header.textContent = cat;
+      grid.appendChild(header);
+      groups[cat]
+        .slice()
+        .sort((a,b)=> a.name.localeCompare(b.name, undefined, {sensitivity:'base'}))
+        .forEach(item=> grid.appendChild(buildItemCard(item)));
+    });
+  } else {
+    items
+      .slice()
+      .sort((a,b)=> a.name.localeCompare(b.name, undefined, {sensitivity:'base'}))
+      .forEach(item=> grid.appendChild(buildItemCard(item)));
+  }
+}
+
+function addToCart(item, qty){
+  const existing = cart.find(c=>c.itemId===item.id);
+  const avail = availableQty(item);
+  if(existing){
+    existing.qty = Math.min(avail, existing.qty + qty);
+  } else {
+    cart.push({itemId:item.id, name:item.name, qty: Math.min(avail, qty)});
+  }
+  renderCart();
+  showToast(`Added ${item.name} to cart`);
+}
+
+async function refreshAndReconcileCart(){
+  await loadData();
+  let changed = false;
+  const removed = [];
+  cart = cart.filter(c=>{
+    const item = inventory.find(i=>i.id===c.itemId);
+    if(!item){ removed.push(c.name); changed = true; return false; }
+    const avail = availableQty(item);
+    if(avail <= 0){ removed.push(c.name); changed = true; return false; }
+    if(c.qty > avail){ c.qty = avail; changed = true; }
+    return true;
+  });
+
+  if(changed){
+    if(removed.length){
+      showToast(`Heads up — ${removed.join(', ')} ${removed.length>1?'were':'was'} just taken and removed from your cart`);
+    } else {
+      showToast('Cart quantities adjusted — some stock changed since you loaded this page');
+    }
+  }
+  renderCart();
+  renderGrid();
+  return changed;
+}
+
+function renderCart(){
+  document.getElementById('cartCount').textContent = cart.reduce((s,c)=>s+c.qty,0);
+  const wrap = document.getElementById('cartLines');
+  if(cart.length===0){
+    wrap.innerHTML = '<div class="empty">Cart is empty. Add items from the checkout screen.</div>';
+    return;
+  }
+  wrap.innerHTML = "";
+  cart.forEach((c,idx)=>{
+    const item = inventory.find(i=>i.id===c.itemId);
+    const avail = item ? availableQty(item) : c.qty;
+    const line = document.createElement('div');
+    line.className = 'cart-line';
+    line.innerHTML = `
+      <span class="cart-name">${c.name}</span>
+      <div class="cart-qty">
+        <button class="qty-btn minus" type="button" ${c.qty<=1?'disabled':''}>−</button>
+        <input type="number" class="cart-qty-input mono" min="1" max="${avail}" value="${c.qty}">
+        <button class="qty-btn plus" type="button" ${c.qty>=avail?'disabled':''}>+</button>
+      </div>
+      <button class="rm">✕</button>
+    `;
+    line.querySelector('.minus').onclick = ()=> updateCartQty(idx, -1);
+    line.querySelector('.plus').onclick = ()=> updateCartQty(idx, 1);
+    line.querySelector('.cart-qty-input').addEventListener('change', (e)=>{
+      const v = parseInt(e.target.value);
+      setCartQty(idx, isNaN(v) ? c.qty : v);
+    });
+    line.querySelector('.rm').onclick = ()=>{ cart.splice(idx,1); renderCart(); };
+    wrap.appendChild(line);
+  });
+}
+
+function updateCartQty(idx, delta){
+  const c = cart[idx];
+  if(!c) return;
+  setCartQty(idx, c.qty + delta);
+}
+
+function setCartQty(idx, newQty){
+  const c = cart[idx];
+  if(!c) return;
+  const item = inventory.find(i=>i.id===c.itemId);
+  const avail = item ? availableQty(item) : c.qty;
+  if(newQty < 1) newQty = 1;
+  if(newQty > avail){
+    newQty = avail;
+    showToast(`Only ${avail} available`);
+  }
+  c.qty = newQty;
+  renderCart();
+}
+
+async function openCart(){
+  document.getElementById('main-view').style.display = 'none';
+  document.getElementById('cart-view').style.display = 'block';
+  document.getElementById('cart-fab').style.display = 'none';
+  await refreshAndReconcileCart();
+}
+function closeCartFn(){
+  document.getElementById('cart-view').style.display = 'none';
+  document.getElementById('main-view').style.display = 'block';
+  document.getElementById('cart-fab').style.display = 'flex';
+}
+
+document.getElementById('cart-fab').onclick = openCart;
+document.getElementById('closeCart').onclick = closeCartFn;
+
+document.getElementById('coIndef').addEventListener('change', (e)=>{
+  document.getElementById('returnDateField').style.display = e.target.checked ? 'none' : 'flex';
+});
+
+document.getElementById('submitCheckout').onclick = async ()=>{
+  const name = document.getElementById('coName').value.trim();
+  const email = document.getElementById('coEmail').value.trim();
+  const indefinite = document.getElementById('coIndef').checked;
+  const returnDate = document.getElementById('coReturn').value;
+
+  if(cart.length===0){ showToast('Your cart is empty'); return; }
+  if(!name){ showToast('Enter your name'); return; }
+  if(!/^\S+@\S+\.\S+$/.test(email)){ showToast('Enter a valid email'); return; }
+  if(!indefinite && !returnDate){ showToast('Pick a return date or mark as indefinite'); return; }
+
+  const btn = document.getElementById('submitCheckout');
+  btn.disabled = true; btn.textContent = 'Checking stock…';
+
+  const changed = await refreshAndReconcileCart();
+  if(changed){
+    btn.disabled = false; btn.textContent = 'Confirm Checkout';
+    if(cart.length===0){ showToast('Everything in your cart was just taken — pick again'); }
+    else { showToast('Cart updated to match current stock — check it and confirm again'); }
+    return;
+  }
+
+  // Restricted (Black/Ultra Black) items are visible in the grid and can be
+  // added to the cart like anything else, but taking one still needs the
+  // lab's release passcode - asked for once here, covering the whole cart,
+  // rather than per item. Cancelling backs out of checkout entirely rather
+  // than silently dropping the restricted item(s), since the shopper may
+  // specifically be here for that device.
+  const hasRestricted = cart.some(c=>{
+    const it = inventory.find(i=>i.id===c.itemId);
+    return it && it.restricted;
+  });
+  let releaseCode;
+  if(hasRestricted){
+    releaseCode = await showModal({
+      title: 'Release Passcode Required',
+      msg: 'Your cart includes a restricted item. Enter the release passcode (from a lab admin) to continue.',
+      isPassword:true, inputType:'password', okText:'Continue'
+    });
+    if(releaseCode === null){
+      btn.disabled = false; btn.textContent = 'Confirm Checkout';
+      return;
+    }
+  }
+
+  btn.textContent = 'Saving…';
+
+  try{
+    await apiWrite(checkoutsUrl(), 'POST', {
+      name, email, indefinite,
+      returnDate: indefinite ? null : returnDate,
+      items: cart,
+      labName: currentLab.name,
+      ...(hasRestricted ? { releaseCode } : {})
+    });
+    cart = [];
+    await loadData();
+    renderCart();
+    renderGrid();
+    closeCartFn();
+    showToast('Checked out. Thanks!');
+    document.getElementById('coName').value='';
+    document.getElementById('coEmail').value='';
+    document.getElementById('coReturn').value='';
+    document.getElementById('coIndef').checked=false;
+    document.getElementById('returnDateField').style.display='flex';
+  }catch(e){
+    // The server re-validates stock at the moment it actually commits the
+    // checkout (not just when the page last loaded), so someone else can
+    // still beat you to the last unit between the client-side reconcile
+    // above and this request landing. When that happens the API sends back
+    // a specific reason - show it instead of a generic error, then refresh
+    // so the cart reflects what's really left.
+    showToast(e.detail || 'Something went wrong saving — try again');
+    await loadData();
+    renderCart();
+    renderGrid();
+  }
+  btn.disabled = false; btn.textContent = 'Confirm Checkout';
+};
+
+const debouncedRenderGrid = debounce(renderGrid, 150);
+document.getElementById('search').addEventListener('input', (e)=>{
+  searchTerm = e.target.value; debouncedRenderGrid();
+});
+
+/* ---------- RETURN ITEMS (self-service, no admin needed) ---------- */
+document.getElementById('returnItemsBtn').onclick = async ()=>{
+  const email = await showModal({
+    title: 'Return Items',
+    msg: "Enter the email you used at checkout — we'll show what you still have outstanding.",
+    isPassword: true, inputType: 'email', okText: 'Look up'
+  });
+  if(!email || !email.trim()) return;
+  await openReturnFlow(email.trim());
+};
+
+document.getElementById('closeReturnOverlay').onclick = ()=>{
+  document.getElementById('return-overlay').classList.remove('open');
+};
+
+async function openReturnFlow(email){
+  let fresh;
+  try{ fresh = await apiGet(checkoutsUrl()); }catch(e){ fresh = checkouts; }
+  checkouts = fresh;
+
+  const mine = fresh.filter(c =>
+    (c.email||'').toLowerCase() === email.toLowerCase() && c.items.some(it=>!it.returned)
+  );
+  // Anything of theirs that's already marked returned but has no return
+  // date on record - almost always a checkout that predates per-item
+  // timestamps. They're the only one (besides an admin) who can actually
+  // say when it came back, so offer that here too, not just in the admin
+  // panel.
+  const needsDate = fresh.filter(c =>
+    (c.email||'').toLowerCase() === email.toLowerCase() && c.items.some(it=> it.returned && !it.returnedAt)
+  );
+
+  const listEl = document.getElementById('returnList');
+  const msgEl = document.getElementById('returnOverlayMsg');
+  listEl.innerHTML = '';
+
+  if(mine.length === 0 && needsDate.length === 0){
+    msgEl.textContent = `No outstanding items found for ${email} in ${currentLab.name}.`;
+    document.getElementById('return-overlay').classList.add('open');
+    return;
+  }
+
+  msgEl.textContent = mine.length
+    ? `Outstanding checkouts for ${email} — uncheck anything you're keeping:`
+    : `Nothing currently outstanding for ${email}.`;
+
+  mine.forEach(c=>{
+    const card = document.createElement('div');
+    card.className = 'return-checkout-card';
+    const itemsHtml = c.items.map(it => `
+      <label class="return-item-row ${it.returned?'already-returned':''}">
+        <input type="checkbox" class="return-item-cb" data-item-id="${escapeAttr(it.itemId)}" ${it.returned?'checked disabled':'checked'}>
+        ${escapeAttr(it.name)} × ${it.qty} ${it.returned?'(already returned)':''}
+      </label>
+    `).join('');
+    card.innerHTML = `
+      <div class="mono" style="font-size:11px; color:var(--ink-soft); margin-bottom:6px;">Checked out ${new Date(c.createdAt).toLocaleDateString()}</div>
+      ${itemsHtml}
+      <button class="btn btn-teal btn-full" style="margin-top:10px;" type="button">Confirm Return</button>
+    `;
+    card.querySelector('button').onclick = async (e)=>{
+      const btn = e.currentTarget;
+      const itemIds = Array.from(card.querySelectorAll('.return-item-cb:checked:not(:disabled)')).map(cb=>cb.dataset.itemId);
+      if(itemIds.length === 0){ showToast('Nothing selected to return'); return; }
+      btn.disabled = true; btn.textContent = 'Returning…';
+      try{
+        checkouts = await apiWrite(checkoutsUrl(), 'PATCH', { id: c.id, action: 'returnItems', email, itemIds });
+        showToast('Marked as returned — thank you!');
+        await loadData();
+        renderGrid();
+        await openReturnFlow(email);
+      }catch(err){
+        showToast(err.detail || 'Something went wrong — try again');
+        btn.disabled = false; btn.textContent = 'Confirm Return';
+      }
+    };
+    listEl.appendChild(card);
+  });
+
+  if(needsDate.length){
+    const heading = document.createElement('div');
+    heading.className = 'small-note';
+    heading.style.cssText = 'margin:14px 0 8px;font-weight:600;';
+    heading.textContent = "Missing a return date — let us know when these actually came back:";
+    listEl.appendChild(heading);
+
+    needsDate.forEach(c=>{
+      const card = document.createElement('div');
+      card.className = 'return-checkout-card';
+      const header = document.createElement('div');
+      header.className = 'mono';
+      header.style.cssText = 'font-size:11px;color:var(--ink-soft);margin-bottom:8px;';
+      header.textContent = `Checked out ${new Date(c.createdAt).toLocaleDateString()}`;
+      card.appendChild(header);
+
+      c.items.filter(it=> it.returned && !it.returnedAt).forEach(it=>{
+        const row = document.createElement('div');
+        row.style.cssText = 'display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-bottom:8px;';
+        const label = document.createElement('span');
+        label.textContent = `${it.name} × ${it.qty}`;
+        row.appendChild(label);
+        row.appendChild(buildBackfillForm(
+          { checkoutId: c.id, items: [{ itemId: it.itemId, name: it.name, qty: it.qty }] },
+          { email, onSaved: ()=> openReturnFlow(email) }
+        ));
+        card.appendChild(row);
+      });
+      listEl.appendChild(card);
+    });
+  }
+
+  document.getElementById('return-overlay').classList.add('open');
+}
+
+/* ---------- QR SCANNER (checkout via camera) ---------- */
+let html5QrCode = null;
+let scannerActive = false;
+let lastScan = { text:'', at:0 };
+
+document.getElementById('scanBtn').onclick = openScanner;
+document.getElementById('scannerClose').onclick = closeScanner;
+document.getElementById('scannerDone').onclick = async ()=>{
+  await closeScanner();
+  openCart();
+};
+
+async function openScanner(){
+  document.getElementById('scanner-overlay').classList.add('open');
+  const feedback = document.getElementById('scanFeedback');
+  feedback.textContent = 'Starting camera…';
+
+  await loadData(); // make sure availability is current before scanning
+  renderGrid();
+
+  if(typeof Html5Qrcode === 'undefined'){
+    feedback.textContent = 'Scanner library failed to load — check your connection and try again.';
+    return;
+  }
+  if(!html5QrCode){
+    html5QrCode = new Html5Qrcode("qr-reader");
+  }
+  try{
+    await html5QrCode.start(
+      { facingMode: "environment" },
+      { fps: 10, qrbox: 220 },
+      onScanSuccess,
+      ()=>{ /* ignore per-frame no-scan noise */ }
+    );
+    scannerActive = true;
+    feedback.textContent = 'Point camera at an item QR label…';
+  }catch(err){
+    feedback.textContent = 'Camera access denied or unavailable on this device.';
+  }
+}
+
+async function closeScanner(){
+  document.getElementById('scanner-overlay').classList.remove('open');
+  if(html5QrCode && scannerActive){
+    try{ await html5QrCode.stop(); html5QrCode.clear(); }catch(e){}
+    scannerActive = false;
+  }
+}
+
+let scanCheckTimer = null;
+function flashScanCheck(){
+  const el = document.getElementById('scanCheckmark');
+  el.classList.add('show');
+  clearTimeout(scanCheckTimer);
+  scanCheckTimer = setTimeout(()=> el.classList.remove('show'), 700);
+}
+
+function onScanSuccess(decodedText){
+  const now = Date.now();
+  if(decodedText === lastScan.text && now - lastScan.at < 1500) return; // debounce repeat frames
+  lastScan = { text: decodedText, at: now };
+
+  const id = decodedText.startsWith('LABITEM:') ? decodedText.slice(8) : decodedText;
+  const item = inventory.find(i=>i.id === id);
+  const feedback = document.getElementById('scanFeedback');
+  if(!item){
+    feedback.textContent = 'Unrecognized code — not a lab item QR.';
+    return;
+  }
+  const avail = availableQty(item);
+  if(avail <= 0){
+    feedback.textContent = `${item.name} — none available right now.`;
+    return;
+  }
+  addToCart(item, 1);
+  flashScanCheck();
+  feedback.textContent = `✓ Added ${item.name} — keep scanning or tap Done.`;
+}
+
+/* ---------- ADMIN ---------- */
+let allLabs = [];
+let allAdmins = [];
+let editingAdminId = null;
+let companyInventory = [];   // superadmin-only aggregate: inventory rows tagged with labId/labName - see fetchCompanyInventorySafe()
+
+// Labs the CURRENT admin is allowed to see/manage - superadmins get
+// everything (except a lab that itself carries a classification tier they
+// aren't cleared for - see labsVisibleTo in lib/lab-registry.mjs, already
+// applied server-side to whatever `allLabs` contains), lab-admins are
+// restricted to their assigned labs.
+function visibleLabsForAdmin(){
+  if(!adminUser) return [];
+  if(adminUser.role === 'superadmin') return allLabs;
+  return allLabs.filter(l => (adminUser.labs||[]).includes(l.id));
+}
+
+/* ---------- ADMIN: sidebar section switching ---------- */
+function showAdminSection(key){
+  document.querySelectorAll('.admin-content .admin-section').forEach(el=>{
+    el.classList.toggle('active', el.dataset.adminSection === key);
+  });
+  document.querySelectorAll('.admin-nav-btn').forEach(btn=>{
+    btn.classList.toggle('active', btn.dataset.target === key);
+  });
+}
+document.querySelectorAll('.admin-nav-btn').forEach(btn=>{
+  btn.onclick = ()=> showAdminSection(btn.dataset.target);
+});
+
+// Shows admin-owned controls (currently just "switch lab") only once an
+// admin session actually exists - an anonymous shopper holding only a
+// per-lab access token has nothing else to switch to.
+function updateTopActionsVisibility(){
+  document.getElementById('switchLabBtn').style.display = adminUnlocked ? '' : 'none';
+}
+
+async function enterAdminView(sectionToShow){
+  const ok = await ensureAdminUnlocked();
+  if(!ok) return;
+  document.getElementById('lab-picker-view').style.display = 'none';
+  document.getElementById('main-view').style.display = 'none';
+  document.getElementById('admin-view').style.display = 'block';
+  document.getElementById('cart-fab').style.display = 'none';
+  allLabs = await fetchLabsSafe();
+
+  const myLabs = visibleLabsForAdmin();
+  if(!currentLab.id && myLabs.length){
+    // admin arrived with no lab chosen yet (e.g. straight from the "no lab
+    // selected" screen) - default into the first lab they're allowed to
+    // manage, carrying its access token along so the shopper view works too.
+    currentLab = { id: myLabs[0].id, name: myLabs[0].name, accessToken: myLabs[0].accessToken, locked: myLabs[0].locked };
+    await loadData();
+  }
+  document.getElementById('adminBrandTitle').textContent = (currentLab.name || 'Lab') + ' — Inventory & Checkout Log';
+
+  const isSuper = adminUser && adminUser.role === 'superadmin';
+  document.querySelector('.admin-nav-btn[data-target="adminAccounts"]').style.display = isSuper ? '' : 'none';
+  document.getElementById('companyInvNavBtn').style.display = isSuper ? '' : 'none';
+  if(isSuper){
+    allAdmins = await fetchAdminsSafe();
+    cancelEditAdmin();
+    renderAdminAccounts();
+    companyInventory = await fetchCompanyInventorySafe();
+    renderCompanyInventory();
+  }
+
+  const roleLabel = isSuper ? 'Superadmin' : 'Lab Admin';
+  document.getElementById('adminUserInfo').innerHTML =
+    `Signed in as<br><b>${escapeAttr(adminUser.username)}</b> · ${roleLabel}`;
+
+  updateTopActionsVisibility();
+  renderAdminLabList();
+  renderQR();
+  renderAdmin();
+  refreshAuditLogAccess();
+  // Default landing section: Admin Accounts for a superadmin (the section
+  // they land on most often to manage vendor/lab access), falling back to
+  // Inventory for a lab-admin, who can't see the Admin Accounts section at
+  // all (its nav button is hidden for them just above).
+  showAdminSection(sectionToShow || (isSuper ? 'adminAccounts' : 'inventory'));
+}
+document.getElementById('adminToggle').onclick = ()=> enterAdminView();
+document.getElementById('noLabAdminBtn').onclick = ()=> enterAdminView();
+// Clicking "switch lab" while already signed in just jumps straight to the
+// admin panel's Labs section - the only place a "switch" makes sense now
+// that there's no public list of every lab to browse.
+document.getElementById('switchLabBtn').onclick = ()=> enterAdminView('labs');
+
+// There is deliberately no "back to checkout" path out of the admin panel -
+// the shopper view is only ever reached via a lab's own private share link
+// (see the Labs section's 🔗 button), never by navigating out of admin.
+// Signing out always lands on the private "no lab selected" screen, never
+// the shopper view, regardless of whichever lab happened to be loaded in
+// the admin session.
+document.getElementById('signOutBtn').onclick = async ()=>{
+  clearAdminSession();
+  showToast('Signed out');
+  document.getElementById('admin-view').style.display = 'none';
+  showNoLabSelected();
+};
+document.getElementById('changePwBtn').onclick = ()=> showChangePasswordModal();
+
+/* ---------- ADMIN: lab management + switching ---------- */
+// The prominent sidebar control (visible on every admin section, not just
+// Labs) for jumping between inventories - a dropdown when the admin has
+// access to more than one lab, otherwise just the lab's name as plain text
+// (nothing to switch to). Kept in sync by calling this from inside
+// renderAdminLabList() below, so every place that already refreshes the lab
+// list after an add/rename/regenerate/delete keeps this current too,
+// without needing its own separate set of call sites.
+function renderAdminLabSwitcher(){
+  const labs = visibleLabsForAdmin();
+  const select = document.getElementById('adminLabSwitchSelect');
+  const singleText = document.getElementById('adminLabSwitcherSingle');
+  if(labs.length <= 1){
+    select.style.display = 'none';
+    singleText.style.display = 'block';
+    singleText.textContent = (labs[0] && labs[0].name) || currentLab.name || 'No lab assigned';
+    return;
+  }
+  select.style.display = '';
+  singleText.style.display = 'none';
+  select.innerHTML = labs.map(l =>
+    `<option value="${escapeAttr(l.id)}"${l.id === currentLab.id ? ' selected' : ''}>${escapeAttr(l.name)}</option>`
+  ).join('');
+}
+document.getElementById('adminLabSwitchSelect').addEventListener('change', (e)=>{
+  const lab = visibleLabsForAdmin().find(l => l.id === e.target.value);
+  if(lab) switchAdminToLab(lab);
+});
+
+function renderAdminLabList(){
+  renderAdminLabSwitcher();
+  const wrap = document.getElementById('adminLabList');
+  const isSuper = adminUser && adminUser.role === 'superadmin';
+  const labs = visibleLabsForAdmin();
+  const addForm = document.getElementById('adminAddLabForm');
+  if(addForm) addForm.style.display = isSuper ? 'grid' : 'none';
+
+  if(labs.length === 0){
+    wrap.innerHTML = '<div class="empty" style="padding:8px 0;">' +
+      (isSuper ? 'No labs found.' : "You haven't been assigned to any labs yet — ask a superadmin.") +
+      '</div>';
+    return;
+  }
+  wrap.innerHTML = "";
+  labs.forEach(lab=>{
+    const isCurrent = lab.id === currentLab.id;
+    const row = document.createElement('div');
+    row.className = 'lab-row' + (isCurrent ? ' current' : '');
+    row.innerHTML = `
+      <span class="lab-row-name">${escapeAttr(lab.name)}${lab.locked ? ' 🔒' : ''}</span>
+      ${isCurrent ? '<span class="badge-current mono">current</span>' : '<button class="btn btn-ghost switch-lab-btn" type="button">Switch here</button>'}
+      <div class="lab-card-actions">
+        <button class="lab-icon-btn share-lab-btn" type="button" title="Copy this lab's private share link">🔗</button>
+        <button class="lab-icon-btn regen-lab-btn" type="button" title="Issue a new share link (immediately invalidates the old one)">♻️</button>
+        <button class="lab-icon-btn passcode-lab-btn" type="button" title="${lab.locked ? 'Change or remove entry passcode' : 'Set an entry passcode'}">${lab.locked ? '🔒' : '🔓'}</button>
+        <button class="lab-icon-btn release-lab-btn" type="button" title="${lab.restrictedCheckoutSet ? 'Change or remove restricted-item release passcode' : 'Set a release passcode for restricted (Black/Ultra Black) checkouts'}">${lab.restrictedCheckoutSet ? '🛡️' : '🛡'}</button>
+        <button class="lab-icon-btn rename-lab-btn" type="button" title="Rename lab">✎</button>
+        ${isSuper ? '<button class="lab-icon-btn del-lab-btn" type="button" title="Remove from list">🗑</button>' : ''}
+      </div>
+    `;
+    if(!isCurrent){
+      row.querySelector('.switch-lab-btn').onclick = ()=> switchAdminToLab(lab);
+    }
+    row.querySelector('.share-lab-btn').onclick = async ()=>{
+      const url = location.origin + location.pathname + '?lab=' + encodeURIComponent(lab.accessToken);
+      try{
+        await navigator.clipboard.writeText(url);
+        showToast('Share link copied to clipboard');
+      }catch(e){
+        await showModal({title:'Shareable link for ' + lab.name, msg:'Copy this link (clipboard access was blocked):', isPassword:true, inputType:'text', okText:'Close', defaultValue:url});
+      }
+    };
+    row.querySelector('.regen-lab-btn').onclick = async ()=>{
+      const confirmed = await showModal({
+        title:'Regenerate share link',
+        msg:`This immediately invalidates "${lab.name}"'s current link — anyone still holding the old one (including printed QR codes) loses access right away. Continue?`,
+        okText:'Regenerate'
+      });
+      if(!confirmed) return;
+      try{
+        const result = await apiWrite('/.netlify/functions/labs', 'PATCH', {id:lab.id, regenerateToken:true}, true);
+        allLabs = result.labs;
+        if(isCurrent && result.updated) currentLab.accessToken = result.updated.accessToken;
+        renderAdminLabList();
+        renderQR();
+        showToast('Link regenerated — the old one no longer works');
+      }catch(err){
+        handleAdminApiError(err);
+      }
+    };
+    row.querySelector('.passcode-lab-btn').onclick = async ()=>{
+      if(lab.locked){
+        let verified = false;
+        let isRetry = false;
+        while(!verified){
+          const current = await showModal({
+            title:'Confirm current passcode',
+            msg:(isRetry ? 'Incorrect passcode. ' : '') + `Enter the current passcode for "${lab.name}" to change or remove it.`,
+            isPassword:true, inputType:'password', okText:'Continue', isError:isRetry
+          });
+          if(current === null) return;
+          verified = await verifyLabPasscode(lab.accessToken, current);
+          isRetry = true;
+        }
+      }
+      const msg = lab.locked
+        ? 'Visitors need a passcode to view this lab. Enter a new one to change it, or leave blank and save to remove the lock.'
+        : 'Set a passcode visitors must enter before viewing this lab. Leave blank to keep it open to anyone with the link.';
+      const newPass = await showModal({title:(lab.locked ? 'Change' : 'Set') + ' entry passcode', msg, isPassword:true, inputType:'text', okText:'Save'});
+      if(newPass === null) return;
+      try{
+        const result = await apiWrite('/.netlify/functions/labs', 'PATCH', {id:lab.id, entryPasscode:newPass}, true);
+        allLabs = result.labs;
+        if(isCurrent) labPasscode = newPass;
+        renderAdminLabList();
+        showToast(newPass ? 'Passcode set' : 'Passcode removed');
+      }catch(err){
+        handleAdminApiError(err);
+      }
+    };
+    row.querySelector('.release-lab-btn').onclick = async ()=>{
+      const msg = lab.restrictedCheckoutSet
+        ? `Anyone checking out a Black/Ultra Black item in "${lab.name}" without personal clearance must enter this code. Enter a new one to change it, or leave blank and save to remove it (restricted items become impossible to check out by anyone without clearance until a new code is set).`
+        : `Set a passcode that lets someone without clearance still check out a Black/Ultra Black item in "${lab.name}" - share it only with staff authorized to release restricted devices, e.g. someone signing a device out for travel.`;
+      const newCode = await showModal({
+        title: (lab.restrictedCheckoutSet ? 'Change' : 'Set') + ' restricted-item release passcode',
+        msg, isPassword:true, inputType:'text', okText:'Save'
+      });
+      if(newCode === null) return;
+      try{
+        const result = await apiWrite('/.netlify/functions/labs', 'PATCH', {id:lab.id, classifiedReleaseCode:newCode}, true);
+        allLabs = result.labs;
+        renderAdminLabList();
+        showToast(newCode ? 'Release passcode set' : 'Release passcode removed');
+      }catch(err){
+        handleAdminApiError(err);
+      }
+    };
+    row.querySelector('.rename-lab-btn').onclick = async ()=>{
+      const newName = await showModal({title:'Rename lab', msg:`Current name: ${lab.name}`, isPassword:true, inputType:'text', okText:'Save'});
+      if(!newName) return;
+      try{
+        const result = await apiWrite('/.netlify/functions/labs', 'PATCH', {id:lab.id, name:newName}, true);
+        allLabs = result.labs;
+        if(isCurrent){
+          currentLab.name = newName;
+          document.getElementById('labBrandTitle').textContent = currentLab.name;
+          document.getElementById('adminBrandTitle').textContent = currentLab.name + ' — Inventory & Checkout Log';
+          document.title = currentLab.name + ' — Supply Checkout';
+        }
+        renderAdminLabList();
+        showToast('Lab renamed');
+      }catch(err){
+        handleAdminApiError(err);
+      }
+    };
+    const delBtn = row.querySelector('.del-lab-btn');
+    if(delBtn){
+      delBtn.onclick = async ()=>{
+        if(isCurrent){ showToast("Can't remove the lab you're currently in — switch first"); return; }
+        const confirmed = await showModal({title:'Remove lab', msg:`Remove "${lab.name}" from the list? Its inventory data is kept, not deleted.`, okText:'Remove'});
+        if(!confirmed) return;
+        try{
+          allLabs = await apiWrite('/.netlify/functions/labs', 'DELETE', {id:lab.id}, true);
+          renderAdminLabList();
+          showToast('Lab removed from list');
+        }catch(err){
+          handleAdminApiError(err);
+        }
+      };
+    }
+    wrap.appendChild(row);
+  });
+}
+
+document.getElementById('adminAddLabBtn').onclick = async ()=>{
+  const nameInput = document.getElementById('adminNewLabName');
+  const name = nameInput.value.trim();
+  if(!name){ showToast('Enter a lab name'); return; }
+  try{
+    const result = await apiWrite('/.netlify/functions/labs', 'POST', {name}, true);
+    allLabs = result.labs;
+    nameInput.value = '';
+    renderAdminLabList();
+    showToast(result.warning || 'Lab added');
+  }catch(err){
+    handleAdminApiError(err);
+  }
+};
+
+async function switchAdminToLab(lab){
+  currentLab = { id: lab.id, name: lab.name, accessToken: lab.accessToken, locked: lab.locked };
+  // The URL still carries the raw id here rather than the token - this is
+  // an admin-only bookmark/deep-link, and resolveLab's id-fallback only
+  // ever honors it for an admin already scoped to that lab (see
+  // lib/lab-registry.mjs), so it never becomes a usable anonymous path.
+  history.replaceState(null, '', location.pathname + '?lab=' + encodeURIComponent(lab.id));
+  document.title = currentLab.name + ' — Supply Checkout';
+  document.getElementById('labBrandTitle').textContent = currentLab.name;
+  document.getElementById('adminBrandTitle').textContent = currentLab.name + ' — Inventory & Checkout Log';
+  await loadData();
+  renderAdminLabList();
+  renderQR();
+  renderAdmin();
+  refreshAuditLogAccess();
+  showToast('Switched to ' + currentLab.name);
+}
+
+/* ---------- ADMIN: company-wide inventory (superadmin only) ---------- */
+// One aggregate list across every lab the current superadmin can see - see
+// the `?all=1` branch on the inventory function. Read-only here: editing an
+// item still only ever happens from inside its own lab's Inventory section,
+// so this never has to duplicate saveField()'s per-lab write plumbing.
+async function fetchCompanyInventorySafe(){
+  try{ return await apiGet('/.netlify/functions/inventory?all=1'); }
+  catch(e){ console.error('fetchCompanyInventorySafe failed', e); return []; }
+}
+
+function buildCompanyInvRow(row){
+  const catCol = categoryColor(row.category);
+  const checkedOut = Math.max(0, (row.qty||0) - (row.available||0));
+  const tr = document.createElement('tr');
+  tr.innerHTML = `
+    <td style="min-width:200px;">
+      ${row.classification && row.classification !== 'standard' ? `<span class="badge" style="background:var(--red-bg); color:var(--red); margin-bottom:4px; display:inline-block;">${row.classification === 'ultraBlack' ? 'Ultra Black' : 'Black'}</span><br>` : ''}
+      <span class="mono">${escapeAttr(row.name)}</span>
+    </td>
+    <td>
+      <span class="cat-dot" style="background:${catCol.solid}"></span>
+      <span class="cat-label mono" style="color:${catCol.solid}">${row.category ? escapeAttr(row.category) : 'no category'}</span>
+    </td>
+    <td class="mono num-cell">${row.qty}</td>
+    <td class="mono num-cell">${checkedOut}</td>
+    <td class="mono num-cell">${row.available}</td>
+    <td><button class="btn btn-ghost manage-lab-btn" type="button">Manage →</button></td>
+  `;
+  tr.querySelector('.manage-lab-btn').onclick = async ()=>{
+    const lab = allLabs.find(l=>l.id===row.labId);
+    if(!lab){ showToast('That lab is no longer available'); return; }
+    await switchAdminToLab(lab);
+    showAdminSection('inventory');
+  };
+  return tr;
+}
+
+function renderCompanyInventory(){
+  const tbody = document.querySelector('#companyInvTable tbody');
+  tbody.innerHTML = '';
+
+  const q = (document.getElementById('companyInvSearch').value || '').trim().toLowerCase();
+  const rows = q
+    ? companyInventory.filter(r =>
+        (r.name||'').toLowerCase().includes(q) ||
+        (r.category||'').toLowerCase().includes(q) ||
+        (r.labName||'').toLowerCase().includes(q))
+    : companyInventory;
+
+  document.getElementById('companyInvCount').textContent = rows.length;
+  document.getElementById('companyInvLabCount').textContent = new Set(rows.map(r=>r.labId)).size;
+
+  if(rows.length === 0){
+    tbody.innerHTML = `<tr><td colspan="6" class="empty">${companyInventory.length===0 ? 'No inventory visible across any lab yet.' : 'No items match that search.'}</td></tr>`;
+    return;
+  }
+
+  // Rows already arrive sorted lab-then-name from the server - group without
+  // re-sorting so that ordering is preserved.
+  const groups = {};
+  const labOrder = [];
+  rows.forEach(row=>{
+    if(!groups[row.labId]){ groups[row.labId] = []; labOrder.push(row.labId); }
+    groups[row.labId].push(row);
+  });
+
+  labOrder.forEach(labId=>{
+    const group = groups[labId];
+    const groupRow = document.createElement('tr');
+    groupRow.innerHTML = `<td colspan="6" class="cat-group-row">${escapeAttr(group[0].labName || labId)} <span class="mono cat-group-count">(${group.length})</span></td>`;
+    tbody.appendChild(groupRow);
+    group.forEach(row=> tbody.appendChild(buildCompanyInvRow(row)));
+  });
+}
+document.getElementById('companyInvSearch').addEventListener('input', debounce(renderCompanyInventory, 150));
+document.getElementById('companyInvRefreshBtn').onclick = async ()=>{
+  companyInventory = await fetchCompanyInventorySafe();
+  renderCompanyInventory();
+  showToast('Company inventory refreshed');
+};
+
+/* ---------- ADMIN: account management (superadmin only) ---------- */
+async function fetchAdminsSafe(){
+  try{ return await apiGet('/.netlify/functions/admins'); }catch(e){ return []; }
+}
+
+function renderNewAdminLabsPicker(selectedIds){
+  const wrap = document.getElementById('newAdminLabsPicker');
+  const role = document.getElementById('newAdminRole').value;
+  if(role === 'superadmin'){
+    wrap.innerHTML = '<div class="small-note">Superadmins automatically have access to every lab.</div>';
+    return;
+  }
+  if(!allLabs || allLabs.length === 0){
+    wrap.innerHTML = '<div class="small-note">No labs exist yet — add one above first.</div>';
+    return;
+  }
+  wrap.innerHTML = allLabs.map(l=>`
+    <label style="display:inline-flex; align-items:center; gap:5px; margin:0 14px 6px 0; font-size:13px;">
+      <input type="checkbox" value="${escapeAttr(l.id)}" ${selectedIds.includes(l.id)?'checked':''}> ${escapeAttr(l.name)}
+    </label>
+  `).join('');
+}
+document.getElementById('newAdminRole').addEventListener('change', ()=>{
+  const editing = editingAdminId ? allAdmins.find(a=>a.id===editingAdminId) : null;
+  renderNewAdminLabsPicker(editing ? (editing.labs||[]) : []);
+});
+
+function startEditAdmin(acc){
+  editingAdminId = acc.id;
+  document.getElementById('newAdminUsername').value = acc.username;
+  document.getElementById('newAdminPassword').value = '';
+  document.getElementById('newAdminPassword').placeholder = 'New password (leave blank to keep)';
+  document.getElementById('newAdminEmail').value = acc.email || '';
+  document.getElementById('newAdminRole').value = acc.role;
+  renderNewAdminLabsPicker(acc.labs || []);
+  document.getElementById('addAdminBtn').textContent = 'Save Changes';
+  document.getElementById('cancelEditAdminBtn').style.display = 'inline-block';
+  document.getElementById('adminFormTitle').textContent = 'Edit admin account: ' + acc.username;
+}
+
+function cancelEditAdmin(){
+  editingAdminId = null;
+  document.getElementById('newAdminUsername').value = '';
+  document.getElementById('newAdminPassword').value = '';
+  document.getElementById('newAdminPassword').placeholder = 'Password (6+ chars)';
+  document.getElementById('newAdminEmail').value = '';
+  document.getElementById('newAdminRole').value = 'labadmin';
+  renderNewAdminLabsPicker([]);
+  document.getElementById('addAdminBtn').textContent = 'Create Admin Account';
+  document.getElementById('cancelEditAdminBtn').style.display = 'none';
+  document.getElementById('adminFormTitle').textContent = 'Add a new admin account';
+}
+document.getElementById('cancelEditAdminBtn').onclick = cancelEditAdmin;
+
+function renderAdminAccounts(){
+  const wrap = document.getElementById('adminAccountsList');
+  if(!allAdmins || allAdmins.length === 0){
+    wrap.innerHTML = '<div class="empty" style="padding:8px 0;">No admin accounts loaded.</div>';
+    return;
+  }
+  wrap.innerHTML = "";
+  allAdmins.forEach(acc=>{
+    const isSelf = adminUser && acc.id === adminUser.id;
+    const labsText = acc.role === 'superadmin'
+      ? 'all labs'
+      : ((acc.labs||[]).map(id=>{
+          const l = allLabs.find(x=>x.id===id);
+          return l ? l.name : id;
+        }).join(', ') || 'no labs assigned');
+    const row = document.createElement('div');
+    row.className = 'lab-row' + (isSelf ? ' current' : '');
+    row.style.flexWrap = 'wrap';
+    row.innerHTML = `
+      <span class="lab-row-name">
+        ${escapeAttr(acc.username)}
+        <span class="mono" style="font-size:10px; color:var(--ink-soft); text-transform:uppercase; margin-left:4px;">${acc.role}</span>
+        <div class="small-note" style="margin-top:2px; font-weight:400;">${escapeAttr(labsText)}${acc.email ? ' · ' + escapeAttr(acc.email) : ' · no email on file (won\'t get low-stock alerts)'}</div>
+        <div class="clearance-chips" style="margin-top:6px; display:flex; flex-wrap:wrap; gap:6px;"></div>
+      </span>
+      ${isSelf ? '<span class="badge-current mono">you</span>' : ''}
+      <div class="lab-card-actions">
+        <button class="lab-icon-btn grant-clearance-btn" type="button" title="Grant black/ultraBlack clearance for a lab">🔐</button>
+        <button class="lab-icon-btn edit-admin-btn" type="button" title="Edit account">✎</button>
+        <button class="lab-icon-btn del-admin-btn" type="button" title="Remove account">🗑</button>
+      </div>
+      <div class="grant-clearance-form" style="display:none; width:100%; margin-top:10px; padding-top:10px; border-top:1px solid var(--border); gap:8px; align-items:center;">
+        <select class="mono grant-lab-select" style="flex:1; min-width:0;"></select>
+        <select class="mono grant-tier-select">
+          <option value="black">Black</option>
+          <option value="ultraBlack">Ultra Black</option>
+        </select>
+        <button class="btn btn-teal grant-confirm-btn" type="button">Grant</button>
+      </div>
+    `;
+
+    // Existing clearances, each removable independently - grant/revoke are
+    // per lab+tier, not a single toggle, mirroring the backend model.
+    const chipsWrap = row.querySelector('.clearance-chips');
+    const clearances = Array.isArray(acc.clearances) ? acc.clearances : [];
+    if(clearances.length === 0){
+      chipsWrap.innerHTML = '<span class="mono" style="font-size:10.5px; color:var(--ink-soft);">no classified clearances</span>';
+    } else {
+      clearances.forEach(c=>{
+        const l = allLabs.find(x=>x.id===c.labId);
+        const chip = document.createElement('span');
+        chip.className = 'chip';
+        chip.style.padding = '4px 10px';
+        chip.style.cursor = 'default';
+        chip.innerHTML = `${escapeAttr(l ? l.name : c.labId)} · ${c.tier === 'ultraBlack' ? 'Ultra Black' : 'Black'} <span class="revoke-clearance" style="cursor:pointer; color:var(--red); margin-left:4px;" title="Revoke">✕</span>`;
+        chip.querySelector('.revoke-clearance').onclick = async ()=>{
+          try{
+            allAdmins = await apiWrite('/.netlify/functions/admins', 'PATCH', {id:acc.id, revokeClearance:{labId:c.labId}}, true);
+            renderAdminAccounts();
+            showToast('Clearance revoked');
+          }catch(err){
+            handleAdminApiError(err);
+          }
+        };
+        chipsWrap.appendChild(chip);
+      });
+    }
+
+    const grantForm = row.querySelector('.grant-clearance-form');
+    const labSelect = row.querySelector('.grant-lab-select');
+    labSelect.innerHTML = allLabs.map(l=>`<option value="${escapeAttr(l.id)}">${escapeAttr(l.name)}</option>`).join('') || '<option value="">No labs yet</option>';
+    row.querySelector('.grant-clearance-btn').onclick = ()=>{
+      grantForm.style.display = grantForm.style.display === 'none' ? 'flex' : 'none';
+    };
+    row.querySelector('.grant-confirm-btn').onclick = async ()=>{
+      const labId = labSelect.value;
+      const tier = row.querySelector('.grant-tier-select').value;
+      if(!labId){ showToast('No lab selected'); return; }
+      try{
+        allAdmins = await apiWrite('/.netlify/functions/admins', 'PATCH', {id:acc.id, grantClearance:{labId, tier}}, true);
+        renderAdminAccounts();
+        showToast('Clearance granted');
+      }catch(err){
+        handleAdminApiError(err);
+      }
+    };
+
+    row.querySelector('.edit-admin-btn').onclick = ()=> startEditAdmin(acc);
+    row.querySelector('.del-admin-btn').onclick = async ()=>{
+      const confirmed = await showModal({title:'Remove admin account', msg:`Remove "${acc.username}"? This can't be undone.`, okText:'Remove'});
+      if(!confirmed) return;
+      try{
+        allAdmins = await apiWrite('/.netlify/functions/admins', 'DELETE', {id:acc.id}, true);
+        if(editingAdminId === acc.id) cancelEditAdmin();
+        renderAdminAccounts();
+        showToast('Admin account removed');
+      }catch(err){
+        handleAdminApiError(err);
+      }
+    };
+    wrap.appendChild(row);
+  });
+}
+
+document.getElementById('addAdminBtn').onclick = async ()=>{
+  const username = document.getElementById('newAdminUsername').value.trim();
+  const password = document.getElementById('newAdminPassword').value;
+  const email = document.getElementById('newAdminEmail').value.trim();
+  const role = document.getElementById('newAdminRole').value;
+  const labs = Array.from(document.querySelectorAll('#newAdminLabsPicker input[type=checkbox]:checked')).map(cb=>cb.value);
+
+  if(!username){ showToast('Username required'); return; }
+  if(!editingAdminId && password.length < 6){ showToast('Password must be 6+ characters'); return; }
+  if(password && password.length < 6){ showToast('Password must be 6+ characters'); return; }
+  if(role === 'labadmin' && labs.length === 0){ showToast('Select at least one lab for a lab-admin'); return; }
+
+  try{
+    if(editingAdminId){
+      const body = { id: editingAdminId, username, email, role, labs };
+      if(password) body.password = password;
+      allAdmins = await apiWrite('/.netlify/functions/admins', 'PATCH', body, true);
+      showToast('Admin account updated');
+    } else {
+      allAdmins = await apiWrite('/.netlify/functions/admins', 'POST', {username, password, email, role, labs}, true);
+      showToast('Admin account created');
+    }
+    cancelEditAdmin();
+    renderAdminAccounts();
+  }catch(err){
+    handleAdminApiError(err);
+  }
+};
+
+// The audit log endpoint itself enforces the clearance gate server-side (see
+// inventory.mjs's `?auditLog=1` branch) - this just probes whether the
+// current admin gets a 200 back, and hides the nav entry entirely rather
+// than showing it disabled, so an uncleared admin doesn't even learn the
+// feature exists for this lab.
+async function refreshAuditLogAccess(){
+  const navBtn = document.getElementById('auditLogNavBtn');
+  try{
+    const res = await fetch(invUrl() + '&auditLog=1', { cache:'no-store', headers: authHeaders(true) });
+    if(res.ok){
+      navBtn.style.display = '';
+      renderAuditLog(await res.json());
+    } else {
+      navBtn.style.display = 'none';
+    }
+  }catch(e){
+    navBtn.style.display = 'none';
+  }
+}
+
+function renderAuditLog(entries){
+  const wrap = document.getElementById('auditLogList');
+  if(!entries || entries.length === 0){
+    wrap.innerHTML = '<div class="empty" style="padding:20px 0;">No classified-item activity recorded for this lab yet.</div>';
+    return;
+  }
+  const table = document.createElement('table');
+  table.innerHTML = '<thead><tr><th>When</th><th>Action</th><th>Item</th><th>Tier</th><th>By</th></tr></thead>';
+  const tbody = document.createElement('tbody');
+  entries.forEach(e=>{
+    const tr = document.createElement('tr');
+    const when = e.at ? new Date(e.at).toLocaleString() : '—';
+    tr.innerHTML = `
+      <td class="mono" style="font-size:12px;">${escapeAttr(when)}</td>
+      <td class="mono" style="text-transform:capitalize;">${escapeAttr(e.action||'')}</td>
+      <td>${escapeAttr(e.itemName || e.itemId || '')}</td>
+      <td><span class="badge" style="background:var(--red-bg); color:var(--red);">${e.tier === 'ultraBlack' ? 'Ultra Black' : 'Black'}</span></td>
+      <td class="mono">${escapeAttr(e.actor || 'unknown')}</td>
+    `;
+    tbody.appendChild(tr);
+  });
+  table.appendChild(tbody);
+  wrap.innerHTML = "";
+  wrap.appendChild(table);
+}
+
+function renderQR(){
+  // Must always encode the token-based visitor URL, never whatever happens
+  // to be in the address bar - after switching labs from the admin panel,
+  // the bar shows an admin-only `?lab=<raw id>` bookmark (see
+  // switchAdminToLab), which doesn't resolve for anonymous scanners at all.
+  // Printing/posting that would silently hand out a QR code that just
+  // 401s for every visitor who scans it.
+  const url = location.origin + location.pathname + '?lab=' + encodeURIComponent(currentLab.accessToken || '');
+  document.getElementById('qrImg').src = currentLab.accessToken
+    ? 'https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=' + encodeURIComponent(url)
+    : '';
+}
+
+function printItemQR(item){
+  const qrUrl = 'https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=' +
+    encodeURIComponent('LABITEM:' + item.id);
+  const w = window.open('', '_blank', 'width=360,height=480');
+  if(!w){ showToast('Allow pop-ups to print QR labels'); return; }
+  w.document.write(`
+    <html><head><title>${item.name} — QR Label</title>
+    <style>
+      body{ font-family: sans-serif; text-align:center; padding:24px; }
+      img{ width:260px; height:260px; }
+      h2{ margin:14px 0 4px; font-size:18px; }
+      p{ color:#555; font-size:12px; }
+      button{ margin-top:16px; padding:8px 16px; font-size:14px; cursor:pointer; }
+      @media print { button{ display:none; } }
+    </style>
+    </head><body>
+      <img src="${qrUrl}" alt="QR code for ${item.name}">
+      <h2>${item.name}</h2>
+      <p>${item.category || ''}</p>
+      <button onclick="window.print()">Print label</button>
+    </body></html>
+  `);
+  w.document.close();
+}
+
+document.getElementById('printAllLabelsBtn').onclick = printAllLabels;
+
+function printAllLabels(){
+  if(inventory.length === 0){ showToast('No items to print labels for'); return; }
+  const w = window.open('', '_blank', 'width=900,height=700');
+  if(!w){ showToast('Allow pop-ups to print QR labels'); return; }
+
+  const cards = inventory.map(item=>{
+    const qrUrl = 'https://api.qrserver.com/v1/create-qr-code/?size=240x240&data=' +
+      encodeURIComponent('LABITEM:' + item.id);
+    return `
+      <div class="label-card">
+        <img src="${qrUrl}" alt="QR for ${item.name}">
+        <div class="label-name">${item.name}</div>
+        <div class="label-cat">${item.category || ''}</div>
+      </div>
+    `;
+  }).join('');
+
+  w.document.write(`
+    <html><head><title>Item QR Labels</title>
+    <style>
+      body{ font-family: sans-serif; padding:20px; }
+      .top-bar{ display:flex; justify-content:space-between; align-items:center; margin-bottom:18px; }
+      .top-bar button{ padding:8px 16px; font-size:14px; cursor:pointer; }
+      .label-grid{ display:grid; grid-template-columns:repeat(3, 1fr); gap:18px; }
+      .label-card{ text-align:center; border:1px dashed #999; border-radius:6px; padding:14px; break-inside:avoid; }
+      .label-card img{ width:150px; height:150px; }
+      .label-name{ font-weight:700; margin-top:8px; font-size:13px; }
+      .label-cat{ color:#666; font-size:11px; }
+      @media print { .top-bar{ display:none; } .label-card{ border-style:solid; } }
+    </style>
+    </head><body>
+      <div class="top-bar">
+        <h2>Item QR Labels (${inventory.length})</h2>
+        <button onclick="window.print()">Print all</button>
+      </div>
+      <div class="label-grid">${cards}</div>
+    </body></html>
+  `);
+  w.document.close();
+}
+
+// Serial number only makes sense for individually-tracked devices, not bulk
+// consumables - kept hidden for a "standard" item so the common case (adding
+// a box of gloves, say) doesn't have an irrelevant field sitting in the way.
+document.getElementById('newClassification').addEventListener('change', (e)=>{
+  const show = e.target.value !== 'standard';
+  document.getElementById('newSerialWrap').style.display = show ? 'block' : 'none';
+  if(!show) document.getElementById('newSerial').value = '';
+});
+
+document.getElementById('addItemBtn').onclick = async ()=>{
+  const name = document.getElementById('newName').value.trim();
+  const cat = document.getElementById('newCat').value.trim();
+  const qty = parseInt(document.getElementById('newQty').value) || 0;
+  const classification = document.getElementById('newClassification').value;
+  const serialNumber = document.getElementById('newSerial').value.trim();
+  if(!name || qty<=0){ showToast('Enter a name and a positive quantity'); return; }
+  try{
+    inventory = await apiWrite(invUrl(), 'POST', {name, category:cat, qty, classification, serialNumber}, true);
+    document.getElementById('newName').value='';
+    document.getElementById('newCat').value='';
+    document.getElementById('newQty').value='';
+    document.getElementById('newClassification').value='standard';
+    document.getElementById('newSerial').value='';
+    document.getElementById('newSerialWrap').style.display='none';
+    renderAdmin();
+    if(classification !== 'standard') refreshAuditLogAccess();
+    showToast(classification !== 'standard' ? `Item added (${classification === 'ultraBlack' ? 'Ultra Black' : 'Black'})` : 'Item added');
+  }catch(e){
+    handleAdminApiError(e);
+  }
+};
+
+/* ---------- ADMIN: assign supplies on someone's behalf ---------- */
+let assignCart = []; // {itemId, name, qty}
+
+document.getElementById('assignIndef').addEventListener('change', (e)=>{
+  document.getElementById('assignReturnField').style.display = e.target.checked ? 'none' : 'flex';
+});
+
+function renderAssignItemOptions(){
+  const sel = document.getElementById('assignItemSelect');
+  const prev = sel.value;
+  sel.innerHTML = "";
+  if(inventory.length === 0){
+    sel.innerHTML = '<option value="">No inventory yet</option>';
+    return;
+  }
+  inventory.forEach(item=>{
+    const avail = availableQty(item);
+    const opt = document.createElement('option');
+    opt.value = item.id;
+    opt.textContent = `${item.name} (${avail} available)`;
+    if(avail === 0) opt.disabled = true;
+    sel.appendChild(opt);
+  });
+  if(prev && inventory.some(i=>i.id===prev)) sel.value = prev;
+}
+
+function renderAssignLines(){
+  const wrap = document.getElementById('assignLines');
+  if(assignCart.length === 0){
+    wrap.innerHTML = '<div class="empty" style="padding:10px 0;">No items added yet.</div>';
+    return;
+  }
+  wrap.innerHTML = "";
+  assignCart.forEach((c,idx)=>{
+    const line = document.createElement('div');
+    line.className = 'cart-line';
+    line.innerHTML = `<span class="cart-name">${c.name} <span class="mono" style="color:var(--ink-soft)">×${c.qty}</span></span><button class="rm">✕</button>`;
+    line.querySelector('.rm').onclick = ()=>{ assignCart.splice(idx,1); renderAssignLines(); };
+    wrap.appendChild(line);
+  });
+}
+
+document.getElementById('assignAddBtn').onclick = ()=>{
+  const sel = document.getElementById('assignItemSelect');
+  const itemId = sel.value;
+  const item = inventory.find(i=>i.id===itemId);
+  if(!item){ showToast('Pick an item first'); return; }
+  const avail = availableQty(item);
+  const qtyInput = document.getElementById('assignQty');
+  let qty = Math.max(1, parseInt(qtyInput.value) || 1);
+  if(avail <= 0){ showToast('Nothing available for that item'); return; }
+  if(qty > avail){ qty = avail; showToast(`Only ${avail} available — capped`); }
+
+  const existing = assignCart.find(c=>c.itemId===item.id);
+  if(existing){
+    existing.qty = Math.min(avail, existing.qty + qty);
+  } else {
+    assignCart.push({itemId:item.id, name:item.name, qty});
+  }
+  renderAssignLines();
+  renderAssignItemOptions();
+};
+
+document.getElementById('assignSubmitBtn').onclick = async ()=>{
+  const name = document.getElementById('assignName').value.trim();
+  const email = document.getElementById('assignEmail').value.trim();
+  const indefinite = document.getElementById('assignIndef').checked;
+  const returnDate = document.getElementById('assignReturn').value;
+  const checkedOutAt = document.getElementById('assignDate').value || null;
+
+  if(assignCart.length === 0){ showToast('Add at least one item'); return; }
+  if(!name){ showToast('Enter their name'); return; }
+  if(!/^\S+@\S+\.\S+$/.test(email)){ showToast('Enter a valid email'); return; }
+  if(!indefinite && !returnDate){ showToast('Pick a return date or mark as indefinite'); return; }
+
+  const btn = document.getElementById('assignSubmitBtn');
+  btn.disabled = true; btn.textContent = 'Assigning…';
+
+  try{
+    const result = await apiWrite(checkoutsUrl(), 'POST', {
+      name, email, indefinite,
+      returnDate: indefinite ? null : returnDate,
+      items: assignCart,
+      checkedOutAt,
+      labName: currentLab.name,
+    }, true);
+
+    assignCart = [];
+    renderAssignLines();
+    document.getElementById('assignName').value = '';
+    document.getElementById('assignEmail').value = '';
+    document.getElementById('assignDate').value = '';
+    document.getElementById('assignReturn').value = '';
+    document.getElementById('assignIndef').checked = false;
+    document.getElementById('assignReturnField').style.display = 'flex';
+
+    await loadData();
+    renderAdmin();
+    renderGrid();
+
+    if(result && result.email_notification){
+      if(result.email_notification.sent) showToast('Items assigned — confirmation email sent');
+      else showToast('Items assigned — email not sent (' + (result.email_notification.reason || 'check email setup') + ')');
+    } else {
+      showToast('Items assigned');
+    }
+  }catch(e){
+    handleAdminApiError(e, 'Something went wrong assigning items');
+  }
+  btn.disabled = false; btn.textContent = 'Assign Items';
+};
+
+let logFilter = 'all';
+let logSearchTerm = '';
+document.querySelectorAll('[data-logfilter]').forEach(chip=>{
+  chip.onclick = ()=>{
+    document.querySelectorAll('[data-logfilter]').forEach(c=>c.classList.remove('active'));
+    chip.classList.add('active');
+    logFilter = chip.dataset.logfilter;
+    renderLog();
+  };
+});
+const debouncedRenderLog = debounce(renderLog, 150);
+document.getElementById('logSearch').addEventListener('input', (e)=>{
+  logSearchTerm = e.target.value;
+  debouncedRenderLog();
+});
+
+function renderAdmin(){
+  renderInvTable();
+  renderLog();
+  renderAssignItemOptions();
+}
+
+/* ---------- Notes: history list + pencil-edit + add box ---------- */
+// The full noteHistory array no longer travels with the bulk inventory
+// list at all (see inventory.mjs's writeNoteHistory) - it's the
+// highest-churn field in the app, so keeping it out of the shared per-lab
+// blob is what lets item count and concurrent-editor count scale
+// independently of each other. All the bulk list carries is a cheap
+// `hasNotes` boolean; the actual note text is fetched on demand, only when
+// someone opens the notes modal for a specific item.
+async function fetchNoteHistory(itemId){
+  try{
+    const data = await apiGet(invUrl() + '&notes=' + encodeURIComponent(itemId));
+    return Array.isArray(data.noteHistory) ? data.noteHistory : [];
+  }catch(e){
+    console.error('fetchNoteHistory: failed to load notes for item', itemId, e);
+    return null; // distinguish "failed to load" from "genuinely empty"
+  }
+}
+
+function formatNoteTimestamp(iso){
+  if(!iso) return 'Added previously';
+  const d = new Date(iso);
+  if(isNaN(d.getTime())) return 'Added previously';
+  return d.toLocaleString(undefined, { month:'short', day:'numeric', year:'numeric', hour:'numeric', minute:'2-digit' });
+}
+
+let closeActiveNotesModal = null;
+
+async function openNotesModal(item){
+  if(closeActiveNotesModal) closeActiveNotesModal();
+
+  const overlay = document.getElementById('notes-overlay');
+  const titleEl = document.getElementById('notesTitle');
+  const subtitleEl = document.getElementById('notesSubtitle');
+  const listEl = document.getElementById('notesList');
+  const newText = document.getElementById('notesNewText');
+  const addBtn = document.getElementById('notesAddBtn');
+  const closeBtn = document.getElementById('notesCloseBtn');
+
+  titleEl.textContent = item.name;
+  newText.value = '';
+  subtitleEl.textContent = 'Loading…';
+  listEl.innerHTML = '<div class="note-empty">Loading notes…</div>';
+  overlay.classList.add('open');
+
+  // Fetched fresh every time the modal opens rather than carried on the
+  // item object - see fetchNoteHistory() above for why.
+  let history = await fetchNoteHistory(item.id);
+  if(history === null){
+    showToast('Could not load notes - try again');
+    overlay.classList.remove('open');
+    return;
+  }
+
+  function updateSubtitle(){
+    subtitleEl.textContent = history.length ? `${history.length} note${history.length===1?'':'s'}` : 'No notes yet';
+  }
+
+  function render(){
+    updateSubtitle();
+    listEl.innerHTML = '';
+    if(history.length === 0){
+      listEl.innerHTML = '<div class="note-empty">No notes yet — add the first one below.</div>';
+      return;
+    }
+    // newest first, so the most recent context is what you see first
+    history.slice().reverse().forEach(entry=>{
+      const row = document.createElement('div');
+      row.className = 'note-entry';
+      row.innerHTML = `
+        <div class="note-entry-text"></div>
+        <div class="note-entry-meta">
+          <span class="note-entry-time"></span>
+          <span class="note-entry-actions">
+            <button type="button" class="note-entry-edit-btn" title="Edit this note">✎ Edit</button>
+            <button type="button" class="note-entry-delete-btn" title="Delete this note">🗑 Delete</button>
+          </span>
+        </div>
+      `;
+      row.querySelector('.note-entry-text').textContent = entry.text;
+      const timeLabel = (entry.updatedAt && entry.updatedAt !== entry.createdAt)
+        ? `${formatNoteTimestamp(entry.updatedAt)} (edited)`
+        : formatNoteTimestamp(entry.createdAt);
+      row.querySelector('.note-entry-time').textContent = timeLabel;
+      row.querySelector('.note-entry-edit-btn').onclick = ()=> startEdit(row, entry);
+      row.querySelector('.note-entry-delete-btn').onclick = async ()=>{
+        const confirmed = await showModal({title:'Delete note', msg:'Delete this note? This can\'t be undone.', okText:'Delete'});
+        if(!confirmed) return;
+        persist(history.filter(e => e.id !== entry.id), 'Note deleted');
+      };
+      listEl.appendChild(row);
+    });
+  }
+
+  function startEdit(row, entry){
+    row.innerHTML = `
+      <textarea class="edit-note-textarea"></textarea>
+      <div class="modal-actions" style="margin-top:0;">
+        <button type="button" class="btn btn-ghost edit-note-cancel">Cancel</button>
+        <button type="button" class="btn btn-teal edit-note-save">Save</button>
+      </div>
+    `;
+    const ta = row.querySelector('.edit-note-textarea');
+    ta.value = entry.text;
+    setTimeout(()=>{ ta.focus(); ta.select(); }, 20);
+    row.querySelector('.edit-note-cancel').onclick = render;
+    row.querySelector('.edit-note-save').onclick = ()=>{
+      const val = ta.value.trim();
+      if(!val){ showToast('Note text cannot be empty'); return; }
+      const updated = history.map(e => e.id === entry.id
+        ? { ...e, text: val, updatedAt: new Date().toISOString() }
+        : e
+      );
+      persist(updated, 'Note updated');
+    };
+  }
+
+  async function persist(newHistory, successMsg){
+    try{
+      // PUT with a noteHistory field returns {inventory, noteHistory} - a
+      // dedicated shape, since note data no longer lives on the inventory
+      // item itself (see inventory.mjs's PUT handler).
+      const result = await apiWrite(invUrl(), 'PUT', { id: item.id, noteHistory: newHistory }, true);
+      inventory = result.inventory;
+      history = result.noteHistory;
+      renderInvTable();
+      render();
+      showToast(successMsg);
+    }catch(err){
+      handleAdminApiError(err, 'Something went wrong saving that note');
+      // Whatever just failed, don't leave the modal showing what might now
+      // be stale data - re-fetch both the inventory list and this item's
+      // notes fresh from the server, instead of forcing a manual page
+      // refresh to find out. If the write silently succeeded despite the
+      // error response, this makes that visible immediately; if it didn't,
+      // this correctly shows the note list unchanged.
+      try{
+        inventory = await apiGet(invUrl());
+        const fresh = await fetchNoteHistory(item.id);
+        if(fresh !== null) history = fresh;
+        render();
+        renderInvTable();
+      }catch(refreshErr){
+        console.error('persist: failed to refresh inventory after a save error', refreshErr);
+      }
+    }
+  }
+
+  function onAdd(){
+    const val = newText.value.trim();
+    if(!val){ showToast('Write something first'); return; }
+    const entry = { id: crypto.randomUUID(), text: val, createdAt: new Date().toISOString() };
+    persist([...history, entry], 'Note added');
+    newText.value = '';
+  }
+  function onClose(){
+    overlay.classList.remove('open');
+    addBtn.removeEventListener('click', onAdd);
+    closeBtn.removeEventListener('click', onClose);
+    closeActiveNotesModal = null;
+  }
+  closeActiveNotesModal = onClose;
+  addBtn.addEventListener('click', onAdd);
+  closeBtn.addEventListener('click', onClose);
+
+  render();
+}
+
+function buildInvRow(item){
+  const out = checkedOutQty(item.id);
+  const catCol = categoryColor(item.category);
+  const tr = document.createElement('tr');
+  tr.innerHTML = `
+    <td style="min-width:220px;">
+      ${item.classification && item.classification !== 'standard' ? `<span class="badge" style="background:var(--red-bg); color:var(--red); margin-bottom:4px; display:inline-block;">${item.classification === 'ultraBlack' ? 'Ultra Black' : 'Black'}</span>` : ''}
+      <input type="text" value="${escapeAttr(item.name)}" class="nameEdit mono" style="width:100%;min-width:200px;margin-bottom:4px;">
+      ${(item.classification && item.classification !== 'standard') || item.serialNumber ? `
+      <div class="serial-row">
+        <span class="serial-label mono">${item.serialNumber ? escapeAttr(item.serialNumber) : 'no serial number'}</span>
+        <button class="serial-edit-btn" type="button" title="Edit serial number">✎</button>
+        <input type="text" value="${escapeAttr(item.serialNumber||'')}" class="serialEdit mono" placeholder="serial number" style="display:none;">
+      </div>
+      ` : ''}
+      <div class="cat-row">
+        <span class="cat-dot" style="background:${catCol.solid}"></span>
+        <span class="cat-label mono" style="color:${catCol.solid}">${item.category ? escapeAttr(item.category) : 'no category'}</span>
+        <button class="cat-edit-btn" type="button" title="Edit category">✎</button>
+        <input type="text" value="${escapeAttr(item.category||'')}" class="catEdit mono" placeholder="category" style="display:none;">
+      </div>
+    </td>
+    <td>
+      <button type="button" class="btn btn-ghost note-btn${item.hasNotes ? ' has-note' : ''}" title="${item.hasNotes ? 'View notes' : 'Add a note'}">
+        ${item.hasNotes ? '📝 Notes' : '+ Note'}
+      </button>
+    </td>
+    <td class="mono"><input type="number" min="0" value="${item.qty}" class="qtyEdit mono num-cell"></td>
+    <td class="mono"><span class="num-cell-display">${out}</span></td>
+    <td class="mono"><input type="number" min="0" value="${item.lowStockThreshold || ''}" placeholder="off" class="thresholdEdit mono num-cell" title="Email lab admins when available stock drops to or below this number. Leave blank to disable."></td>
+    <td><button class="btn btn-ghost qrLabelBtn" type="button">label</button></td>
+    <td><button class="del-btn">delete</button></td>
+  `;
+  tr.querySelector('.qrLabelBtn').onclick = ()=> printItemQR(item);
+
+  async function saveField(field, value, successMsg){
+    try{
+      inventory = await apiWrite(invUrl(), 'PUT', {id:item.id, [field]:value}, true);
+      renderInvTable();
+      if(item.classification && item.classification !== 'standard') refreshAuditLogAccess();
+      showToast(successMsg);
+    }catch(err){
+      handleAdminApiError(err);
+      // Don't just re-render whatever `inventory` already was (which may now
+      // be stale if the write actually landed despite the error response) -
+      // pull the real current state so the row reflects what's actually
+      // saved instead of requiring a manual refresh to find out.
+      try{
+        inventory = await apiGet(invUrl());
+      }catch(refreshErr){
+        console.error('saveField: failed to refresh inventory after a save error', refreshErr);
+      }
+      renderInvTable();
+    }
+  }
+
+  tr.querySelector('.nameEdit').addEventListener('change', (e)=>{
+    const v = e.target.value.trim();
+    if(!v){ showToast('Name cannot be empty'); renderInvTable(); return; }
+    saveField('name', v, 'Name updated');
+  });
+  const serialLabel = tr.querySelector('.serial-label');
+  const serialBtn = tr.querySelector('.serial-edit-btn');
+  const serialInput = tr.querySelector('.serialEdit');
+  if(serialInput){
+    // Same collapsed-label + pencil-toggle pattern as the category field
+    // right below it - a serial number is looked at rarely and edited even
+    // less often, so it shouldn't compete for attention with an
+    // always-open input the way the name field does.
+    serialBtn.onclick = ()=>{
+      const isEditing = serialInput.style.display !== 'none';
+      if(isEditing){
+        serialInput.style.display = 'none';
+        serialLabel.style.display = 'inline';
+        serialBtn.textContent = '✎';
+      } else {
+        serialLabel.style.display = 'none';
+        serialInput.style.display = 'inline-block';
+        serialBtn.textContent = '✕';
+        serialInput.focus();
+        serialInput.select();
+      }
+    };
+    serialInput.addEventListener('change', (e)=>{
+      saveField('serialNumber', e.target.value.trim(), 'Serial number updated');
+    });
+    serialInput.addEventListener('keydown', (e)=>{
+      if(e.key === 'Escape'){
+        serialInput.style.display = 'none';
+        serialLabel.style.display = 'inline';
+        serialBtn.textContent = '✎';
+      }
+    });
+  }
+  const catLabel = tr.querySelector('.cat-label');
+  const catBtn = tr.querySelector('.cat-edit-btn');
+  const catInput = tr.querySelector('.catEdit');
+  catBtn.onclick = ()=>{
+    const isEditing = catInput.style.display !== 'none';
+    if(isEditing){
+      catInput.style.display = 'none';
+      catLabel.style.display = 'inline';
+      catBtn.textContent = '✎';
+    } else {
+      catLabel.style.display = 'none';
+      catInput.style.display = 'inline-block';
+      catBtn.textContent = '✕';
+      catInput.focus();
+      catInput.select();
+    }
+  };
+  catInput.addEventListener('change', (e)=>{
+    saveField('category', e.target.value.trim(), 'Category updated');
+  });
+  catInput.addEventListener('keydown', (e)=>{
+    if(e.key === 'Escape'){
+      catInput.style.display = 'none';
+      catLabel.style.display = 'inline';
+      catBtn.textContent = '✎';
+    }
+  });
+  tr.querySelector('.note-btn').onclick = ()=> openNotesModal(item);
+  tr.querySelector('.qtyEdit').addEventListener('change', (e)=>{
+    const v = Math.max(0, parseInt(e.target.value)||0);
+    saveField('qty', v, 'Quantity updated');
+  });
+  tr.querySelector('.thresholdEdit').addEventListener('change', (e)=>{
+    const v = Math.max(0, parseInt(e.target.value)||0);
+    saveField('lowStockThreshold', v, v ? 'Low-stock alert set at ' + v : 'Low-stock alert disabled');
+  });
+  tr.querySelector('.del-btn').onclick = async ()=>{
+    const ok = await showModal({title:'Remove item', msg:`Remove "${item.name}" from inventory? This can't be undone.`, okText:'Remove'});
+    if(!ok) return;
+    try{
+      inventory = await apiWrite(invUrl(), 'DELETE', {id:item.id}, true);
+      renderInvTable();
+      if(item.classification && item.classification !== 'standard') refreshAuditLogAccess();
+    }catch(err){
+      handleAdminApiError(err);
+    }
+  };
+  return tr;
+}
+
+function renderInvTable(){
+  document.getElementById('invCount').textContent = inventory.length;
+  const tbody = document.querySelector('#invTable tbody');
+  tbody.innerHTML = "";
+  if(inventory.length===0){
+    tbody.innerHTML = '<tr><td colspan="7" class="empty">No items yet — add some above.</td></tr>';
+    return;
+  }
+
+  const groups = {};
+  inventory.forEach(item=>{
+    const cat = (item.category || '').trim() || 'Uncategorized';
+    (groups[cat] = groups[cat] || []).push(item);
+  });
+  const catNames = Object.keys(groups).sort((a,b)=>{
+    if(a==='Uncategorized') return 1;
+    if(b==='Uncategorized') return -1;
+    return a.localeCompare(b, undefined, {sensitivity:'base'});
+  });
+
+  catNames.forEach(cat=>{
+    const groupRow = document.createElement('tr');
+    const col = categoryColor(cat === 'Uncategorized' ? '' : cat);
+    groupRow.innerHTML = `<td colspan="7" class="cat-group-row" style="border-left:5px solid ${col.solid};background:${col.tint};color:${col.solid};">${escapeAttr(cat)} <span class="mono cat-group-count">(${groups[cat].length})</span></td>`;
+    tbody.appendChild(groupRow);
+    groups[cat].forEach(item=> tbody.appendChild(buildInvRow(item)));
+  });
+}
+
+function statusOf(c){
+  const allReturned = c.items.every(it=>it.returned);
+  if(allReturned) return 'returned';
+  if(!c.indefinite && c.returnDate && new Date(c.returnDate) < new Date(new Date().toDateString())) return 'overdue';
+  if(c.indefinite) return 'indef';
+  return 'active';
+}
+
+// A "person" is keyed by email (falling back to name if a record somehow
+// lacks one) - every checkout that same person has ever made rolls up into
+// one row, rather than each visit to the counter starting a brand-new line
+// in the log. This is deliberately just a client-side grouping over the
+// same flat `checkouts` list the API has always returned; nothing about
+// how a checkout is stored server-side changes.
+function personKey(c){
+  return (c.email || c.name || '').trim().toLowerCase();
+}
+
+function groupCheckoutsByPerson(list){
+  const map = new Map();
+  list.forEach(c=>{
+    const key = personKey(c);
+    if(!map.has(key)) map.set(key, []);
+    map.get(key).push(c);
+  });
+  return Array.from(map.values()).map(group=>{
+    group.sort((a,b)=> new Date(b.createdAt)-new Date(a.createdAt));
+    return { name: group[0].name, email: group[0].email, checkouts: group };
+  });
+}
+
+// Overdue on any one checkout outranks everything else for the row-level
+// badge; otherwise "active" if anything is still outstanding at all, else
+// this person is fully squared away.
+function personStatus(g){
+  const statuses = g.checkouts.map(statusOf);
+  if(statuses.includes('overdue')) return 'overdue';
+  if(statuses.some(s=> s==='active' || s==='indef')) return 'active';
+  return 'returned';
+}
+
+function mergeHistoryForPerson(checkoutList){
+  // Each entry needs to remember which specific checkout it came from -
+  // once several checkouts are merged into one trail, an admin backfilling
+  // a missing return date on one "returned at some point" entry has to PATCH
+  // the right underlying record, not just "this person's most recent one".
+  const all = checkoutList.flatMap(c=> buildHistoryEntries(c).map(e=> ({...e, checkoutId: c.id})));
+  return all.sort((a,b)=>{
+    if(!a.at && !b.at) return 0;
+    if(!a.at) return 1;
+    if(!b.at) return -1;
+    return new Date(a.at) - new Date(b.at);
+  });
+}
+
+function renderLog(){
+  const tbody = document.querySelector('#logTable tbody');
+  tbody.innerHTML = "";
+  let groups = groupCheckoutsByPerson(checkouts);
+  groups.sort((a,b)=> (a.name||'').localeCompare(b.name||'', undefined, {sensitivity:'base'}));
+  if(logFilter!=='all'){
+    groups = groups.filter(g=> personStatus(g)===logFilter);
+  }
+  const q = logSearchTerm.trim().toLowerCase();
+  if(q){
+    groups = groups.filter(g=> (g.name||'').toLowerCase().includes(q) || (g.email||'').toLowerCase().includes(q));
+  }
+  if(groups.length===0){
+    tbody.innerHTML = `<tr><td colspan="3" class="empty">${q ? 'No one matches "' + escapeAttr(logSearchTerm) + '".' : 'No checkouts here.'}</td></tr>`;
+    return;
+  }
+  groups.forEach(g=> renderPersonRow(tbody, g));
+}
+
+// Kept deliberately spare - name/email/how-many-visits, a status badge, and
+// one prominent way in (History). Itemized contents and return dates used
+// to live here too, but with several checkouts rolled into one row that
+// became a wall of text; that level of detail now belongs inside the
+// expanded view, next to the specific checkout it came from.
+function renderPersonRow(tbody, g){
+  const s = personStatus(g);
+  const tr = document.createElement('tr');
+  tr.className = 'person-row';
+  const badgeClass = s==='overdue'?'overdue':s==='returned'?'returned':'active';
+  const countTag = `<span class="mono person-count-tag">${g.checkouts.length} checkout${g.checkouts.length>1?'s':''}</span>`;
+  tr.innerHTML = `
+    <td>${escapeAttr(g.name)}<br><span class="mono" style="font-size:11px;color:var(--ink-soft)">${escapeAttr(g.email)}</span><br>${countTag}</td>
+    <td><span class="badge ${badgeClass}">${s}</span></td>
+    <td></td>
+  `;
+  const actionTd = tr.lastElementChild;
+
+  const historyBtn = document.createElement('button');
+  historyBtn.className = 'btn btn-teal';
+  historyBtn.textContent = 'View history';
+  historyBtn.onclick = ()=> togglePersonDetail(tr, g);
+  actionTd.appendChild(historyBtn);
+
+  tbody.appendChild(tr);
+}
+
+// Expands a person's row into: one compact sub-row per individual checkout
+// they've ever made (each still fully actionable - mark returned, edit
+// items, resend email - exactly as a top-level row used to be), followed
+// by a single merged, chronologically-sorted trail spanning every one of
+// those checkouts. Collapsing removes the whole block in one click.
+function togglePersonDetail(personRow, g){
+  const next = personRow.nextElementSibling;
+  if(next && next.classList.contains('person-detail-marker')){
+    let n = personRow.nextElementSibling;
+    while(n && !n.classList.contains('person-row')){
+      const toRemove = n;
+      n = n.nextElementSibling;
+      toRemove.remove();
+    }
+    return;
+  }
+  document.querySelectorAll('.person-detail-marker, .txn-row, .person-history-row, .edit-items-row, .history-row').forEach(r=> r.remove());
+
+  let anchor = personRow;
+
+  const markerRow = document.createElement('tr');
+  markerRow.className = 'person-detail-marker';
+  const markerTd = document.createElement('td');
+  markerTd.colSpan = 3;
+  markerTd.innerHTML = `<div class="person-detail-label">Checkouts (${g.checkouts.length})</div>`;
+  markerRow.appendChild(markerTd);
+  anchor.after(markerRow);
+  anchor = markerRow;
+
+  g.checkouts.forEach(c=>{
+    const txnRow = buildTxnRow(c);
+    anchor.after(txnRow);
+    anchor = txnRow;
+  });
+
+  const trailRow = buildMergedTrailRow(g);
+  anchor.after(trailRow);
+}
+
+// One person's individual checkout, rendered as a nested row inside their
+// expanded detail block - same fields and actions a top-level row used to
+// carry, just indented to make clear it belongs to the person above it.
+function buildTxnRow(c){
+  const s = statusOf(c);
+  const tr = document.createElement('tr');
+  tr.className = 'txn-row';
+  const itemsHtml = c.items.map(it=>
+    `<div class="mono" style="font-size:12px;${it.returned?'text-decoration:line-through;color:var(--ink-soft);':''}">${escapeAttr(it.name)} ×${it.qty}</div>`
+  ).join('');
+  const badgeClass = s==='overdue'?'overdue':s==='returned'?'returned':s==='indef'?'indef':'active';
+  const badgeText = s==='indef' ? 'indefinite' : s;
+  const sourceTag = c.assignedByAdmin
+    ? '<span class="mono" style="font-size:10px;color:var(--ink-soft)">via admin</span>'
+    : '<span class="mono" style="font-size:10px;color:var(--ink-soft)">via QR/self</span>';
+  const emailTag = !c.lastEmail
+    ? '<span class="mono" style="font-size:10px;color:var(--ink-soft)">✉ not sent</span>'
+    : c.lastEmail.sent
+    ? '<span class="mono" style="font-size:10px;color:var(--teal-dark)">✉ sent</span>'
+    : `<span class="mono" style="font-size:10px;color:var(--red)" title="${escapeAttr(c.lastEmail.reason||'')}">✉ failed</span>`;
+  const checkedOutLine = `<span class="mono" style="font-size:11px;color:var(--ink-soft)">Checked out ${new Date(c.createdAt).toLocaleString()}</span>`;
+  const returnLine = `<span class="mono" style="font-size:11px;color:var(--ink-soft)">${c.indefinite ? 'No return due' : (c.returnDate ? 'Due ' + c.returnDate : '')}</span>`;
+  tr.innerHTML = `
+    <td>${checkedOutLine}<br>${returnLine}<br>${sourceTag} &middot; ${emailTag}<div style="margin-top:6px;">${itemsHtml}</div></td>
+    <td><span class="badge ${badgeClass}">${badgeText}</span></td>
+    <td></td>
+  `;
+  const actionTd = tr.lastElementChild;
+  actionTd.style.display = 'flex';
+  actionTd.style.flexDirection = 'column';
+  actionTd.style.gap = '6px';
+  actionTd.style.alignItems = 'flex-start';
+
+  if(s!=='returned'){
+    const btn = document.createElement('button');
+    btn.className = 'btn btn-ghost';
+    btn.textContent = 'Mark returned';
+    btn.onclick = async ()=>{
+      try{
+        checkouts = await apiWrite(checkoutsUrl(), 'PATCH', {id:c.id}, true);
+        reindexCheckouts();
+        renderLog();
+        renderInvTable();
+        renderGrid();
+        showToast('Marked returned');
+      }catch(err){
+        handleAdminApiError(err);
+      }
+    };
+    actionTd.appendChild(btn);
+
+    const editBtn = document.createElement('button');
+    editBtn.className = 'btn btn-ghost';
+    editBtn.textContent = 'Edit items';
+    editBtn.onclick = ()=> toggleEditItemsRow(tr, c);
+    actionTd.appendChild(editBtn);
+  }
+
+  const resendBtn = document.createElement('button');
+  resendBtn.className = 'btn btn-ghost';
+  resendBtn.textContent = 'Resend email';
+  resendBtn.onclick = async ()=>{
+    resendBtn.disabled = true; resendBtn.textContent = 'Sending…';
+    try{
+      const result = await apiWrite(checkoutsUrl(), 'PATCH', {id:c.id, action:'resendEmail', labName: currentLab.name}, true);
+      checkouts = result.checkouts;
+      reindexCheckouts();
+      renderLog();
+      if(result.email_notification && result.email_notification.sent){
+        showToast('Email resent');
+      } else {
+        showToast('Email not sent — ' + (result.email_notification && result.email_notification.reason ? result.email_notification.reason : 'check email setup'));
+      }
+    }catch(err){
+      handleAdminApiError(err, 'Something went wrong resending');
+      resendBtn.disabled = false; resendBtn.textContent = 'Resend email';
+    }
+  };
+  actionTd.appendChild(resendBtn);
+
+  return tr;
+}
+
+function buildMergedTrailRow(g){
+  const row = document.createElement('tr');
+  row.className = 'person-history-row';
+  const td = document.createElement('td');
+  td.colSpan = 3;
+
+  const panel = document.createElement('div');
+  panel.className = 'edit-items-panel';
+  const title = document.createElement('div');
+  title.className = 'history-trail-title';
+  title.textContent = 'Full history';
+  panel.appendChild(title);
+
+  const trail = document.createElement('div');
+  trail.className = 'history-trail';
+
+  mergeHistoryForPerson(g.checkouts).forEach(e=>{
+    const entryEl = document.createElement('div');
+    entryEl.className = 'history-entry';
+
+    const atEl = document.createElement('span');
+    atEl.className = 'mono history-entry-at';
+    atEl.textContent = e.at ? new Date(e.at).toLocaleString() : 'date not recorded';
+    entryEl.appendChild(atEl);
+
+    const bodyEl = document.createElement('div');
+    bodyEl.className = 'history-entry-body';
+    const descEl = document.createElement('span');
+    descEl.innerHTML = describeHistoryEntry(e);
+    bodyEl.appendChild(descEl);
+
+    // A "returned at some point" entry is the one gap this trail can't
+    // close on its own - nobody ever recorded when it actually happened.
+    // Rather than leave that permanently unknown, let an admin fill it in
+    // right here: pick a date, and it becomes a real, dated
+    // "returned-backfilled" entry (clearly marked as reported rather than
+    // captured live) instead of this placeholder.
+    if(e.action === 'returned-unrecorded' && e.checkoutId){
+      bodyEl.appendChild(buildBackfillForm(e, {admin:true}));
+    }
+
+    entryEl.appendChild(bodyEl);
+    trail.appendChild(entryEl);
+  });
+
+  panel.appendChild(trail);
+  td.appendChild(panel);
+  row.appendChild(td);
+  return row;
+}
+
+// Shared by the admin history trail and the self-service Return Items flow
+// - the only real difference is whether the write goes out with an admin
+// token (opts.admin) or an email to prove ownership (opts.email), matching
+// the same trust model already used for mark-returned vs. self-return.
+function buildBackfillForm(entry, opts){
+  const wrap = document.createElement('div');
+  wrap.className = 'backfill-form';
+
+  const input = document.createElement('input');
+  input.type = 'date';
+  input.className = 'mono backfill-date-input';
+  input.max = new Date().toISOString().slice(0,10);
+
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'btn btn-ghost';
+  btn.textContent = 'Set return date';
+
+  btn.onclick = async ()=>{
+    if(!input.value){ showToast('Pick a date first'); return; }
+    btn.disabled = true; btn.textContent = 'Saving…';
+    try{
+      const payload = {
+        id: entry.checkoutId,
+        action: 'backfillReturnDate',
+        returnedAt: input.value,
+        itemIds: entry.items.map(it=> it.itemId),
+      };
+      if(opts.email) payload.email = opts.email;
+      if(opts.admin){
+        checkouts = await apiWrite(checkoutsUrl(), 'PATCH', payload, true);
+        reindexCheckouts();
+        renderLog();
+        showToast('Return date recorded');
+      } else {
+        await apiWrite(checkoutsUrl(), 'PATCH', payload);
+        showToast('Thanks — return date saved');
+        if(typeof opts.onSaved === 'function') await opts.onSaved();
+      }
+    }catch(err){
+      const msg = err.detail || 'Something went wrong recording that date';
+      if(opts.admin) handleAdminApiError(err, msg); else showToast(msg);
+      btn.disabled = false; btn.textContent = 'Set return date';
+    }
+  };
+
+  wrap.appendChild(input);
+  wrap.appendChild(btn);
+  return wrap;
+}
+
+// Turns one history entry (see checkouts.mjs) into a human-readable line.
+// `items`, when present, already went through the same classification
+// filter as the checkout's top-level items array server-side - nothing
+// extra to hide here.
+function describeHistoryEntry(e){
+  const itemsPart = Array.isArray(e.items) && e.items.length
+    ? ': ' + e.items.map(it=> `${escapeAttr(it.name)} ×${it.qty}`).join(', ')
+    : '';
+  switch(e.action){
+    case 'checked-out': return 'Checked out' + (e.by ? ' (assigned by ' + escapeAttr(e.by) + ')' : '') + itemsPart;
+    case 'returned': return 'Marked returned by ' + escapeAttr(e.by || 'admin') + itemsPart;
+    case 'self-returned': return 'Returned (self-service)' + itemsPart;
+    case 'items-updated': return 'Items updated by ' + escapeAttr(e.by || 'admin');
+    case 'returned-unrecorded': return 'Returned at some point' + itemsPart;
+    case 'returned-backfilled': return 'Return date recorded' + (e.by ? ' (reported by ' + escapeAttr(e.by) + ')' : '') + itemsPart;
+    default: return escapeAttr(e.action || 'Update');
+  }
+}
+
+// A real `history` array only exists on checkouts created (or first
+// touched by a return/edit) after this feature shipped - a checkout that
+// was already sitting in the log before that has no history entries at
+// all, even though every record, old or new, has always carried a
+// `createdAt` and an `items` array. Rather than show an empty trail for
+// any checkout older than the feature itself, this reconstructs the two
+// facts that are always knowable from fields that have existed since day
+// one: what was originally checked out (from createdAt + items) and,
+// separately, which of those items are now returned with no recorded
+// return event covering them (shown honestly as "at some point", never a
+// fabricated timestamp).
+function buildHistoryEntries(c){
+  const real = Array.isArray(c.history) ? c.history : [];
+  const entries = real.slice();
+
+  if(!entries.some(e=> e.action === 'checked-out')){
+    entries.unshift({
+      at: c.createdAt,
+      action: 'checked-out',
+      // A legacy record's boolean `assignedByAdmin` flag has always existed
+      // (unlike the per-entry `by` username, which only started being
+      // captured once this feature shipped) - worth surfacing even without
+      // a specific name attached.
+      by: c.assignedByAdmin ? 'an admin' : undefined,
+      items: c.items.map(it=> ({ itemId: it.itemId, name: it.name, qty: it.qty })),
+    });
+  }
+
+  const coveredIds = new Set();
+  entries.forEach(e=>{
+    if((e.action==='returned' || e.action==='self-returned' || e.action==='returned-backfilled') && Array.isArray(e.items)){
+      e.items.forEach(it=> coveredIds.add(it.itemId));
+    }
+  });
+  const uncovered = c.items.filter(it=> it.returned && !coveredIds.has(it.itemId));
+
+  // Every return has stamped a per-item `returnedAt` since this feature
+  // shipped, even on the rare record whose history array itself didn't get
+  // written - so an uncovered-but-returned item almost always still carries
+  // its real return date right on the item. Group those by timestamp into
+  // proper dated entries (a batch return of several items at once becomes
+  // one entry, not one per item) and only fall back to an undated catch-all
+  // for items whose return genuinely predates returnedAt tracking too -
+  // never invent a timestamp that wasn't actually recorded.
+  const byTimestamp = new Map();
+  const trulyUndated = [];
+  uncovered.forEach(it=>{
+    if(it.returnedAt){
+      if(!byTimestamp.has(it.returnedAt)) byTimestamp.set(it.returnedAt, []);
+      byTimestamp.get(it.returnedAt).push(it);
+    } else {
+      trulyUndated.push(it);
+    }
+  });
+  byTimestamp.forEach((items, at)=>{
+    entries.push({
+      at,
+      action: 'returned-unrecorded',
+      items: items.map(it=> ({ itemId: it.itemId, name: it.name, qty: it.qty })),
+    });
+  });
+  if(trulyUndated.length){
+    entries.push({
+      at: null,
+      action: 'returned-unrecorded',
+      items: trulyUndated.map(it=> ({ itemId: it.itemId, name: it.name, qty: it.qty })),
+    });
+  }
+
+  // Entries with a real timestamp sort chronologically first; the
+  // "returned at some point" catch-all (no timestamp at all) always goes
+  // last, since it represents whatever's left over from before detailed
+  // tracking existed.
+  return entries.sort((a,b)=>{
+    if(!a.at && !b.at) return 0;
+    if(!a.at) return 1;
+    if(!b.at) return -1;
+    return new Date(a.at) - new Date(b.at);
+  });
+}
+
+// Same expand/collapse-a-row-underneath pattern as toggleEditItemsRow right
+// below - shows the full chronological trail for one checkout (oldest
+// first: checked out, then every return/edit event since), so "when was
+// this actually checked out" and "when did each item come back" are both
+// answerable even long after the status badge just says "returned".
+function toggleEditItemsRow(checkoutRow, c){
+  const next = checkoutRow.nextElementSibling;
+  if(next && next.classList.contains('edit-items-row')){
+    next.remove();
+    return;
+  }
+  document.querySelectorAll('.edit-items-row, .history-row').forEach(r=> r.remove());
+
+  const editCart = c.items.filter(it=>!it.returned).map(it=>({itemId:it.itemId, name:it.name, qty:it.qty}));
+
+  function availForEdit(itemId){
+    const item = inventory.find(i=>i.id===itemId);
+    if(!item) return 0;
+    const selfReserved = c.items.find(ci=>ci.itemId===itemId && !ci.returned) ? c.items.find(ci=>ci.itemId===itemId && !ci.returned).qty : 0;
+    return availableQty(item) + selfReserved;
+  }
+
+  const editRow = document.createElement('tr');
+  editRow.className = 'edit-items-row';
+  const td = document.createElement('td');
+  td.colSpan = 3;
+  td.innerHTML = `
+    <div class="edit-items-panel">
+      <div class="small-note" style="margin-bottom:10px;">
+        Adjust what's currently checked out to ${escapeAttr(c.name)}. Saving updates their record and emails them an "updated supply checkout" notice — no return trip needed.
+      </div>
+      <div class="edit-lines"></div>
+      <div class="admin-grid-form" style="grid-template-columns:2fr 1fr auto;margin-top:10px;">
+        <select class="edit-item-select mono"></select>
+        <input type="number" class="edit-item-qty mono" min="1" value="1" placeholder="Qty">
+        <button class="btn btn-teal edit-add-btn" type="button">Add</button>
+      </div>
+      <div style="display:flex;gap:8px;margin-top:12px;">
+        <button class="btn btn-teal edit-save-btn" type="button">Save changes</button>
+        <button class="btn btn-ghost edit-cancel-btn" type="button">Cancel</button>
+      </div>
+    </div>
+  `;
+  editRow.appendChild(td);
+  checkoutRow.after(editRow);
+
+  function renderEditLines(){
+    const wrap = td.querySelector('.edit-lines');
+    if(editCart.length===0){
+      wrap.innerHTML = '<div class="empty" style="padding:8px 0;">No items left — saving with an empty list will mark this checkout fully returned instead.</div>';
+      return;
+    }
+    wrap.innerHTML = "";
+    editCart.forEach((it, idx)=>{
+      const avail = availForEdit(it.itemId);
+      const line = document.createElement('div');
+      line.className = 'cart-line';
+      line.innerHTML = `
+        <span class="cart-name">${escapeAttr(it.name)}</span>
+        <div class="cart-qty">
+          <button class="qty-btn minus" type="button" ${it.qty<=1?'disabled':''}>−</button>
+          <input type="number" class="cart-qty-input mono" min="1" max="${avail}" value="${it.qty}">
+          <button class="qty-btn plus" type="button" ${it.qty>=avail?'disabled':''}>+</button>
+        </div>
+        <button class="rm">✕</button>
+      `;
+      line.querySelector('.minus').onclick = ()=>{ it.qty = Math.max(1, it.qty-1); renderEditLines(); };
+      line.querySelector('.plus').onclick = ()=>{ it.qty = Math.min(avail, it.qty+1); renderEditLines(); };
+      line.querySelector('.cart-qty-input').addEventListener('change', (e)=>{
+        let v = parseInt(e.target.value)||1;
+        v = Math.max(1, Math.min(avail, v));
+        it.qty = v;
+        renderEditLines();
+      });
+      line.querySelector('.rm').onclick = ()=>{ editCart.splice(idx,1); renderEditLines(); };
+      wrap.appendChild(line);
+    });
+  }
+
+  function renderEditItemSelect(){
+    const sel = td.querySelector('.edit-item-select');
+    sel.innerHTML = "";
+    if(inventory.length===0){
+      sel.innerHTML = '<option value="">No inventory yet</option>';
+      return;
+    }
+    inventory.forEach(item=>{
+      const avail = availForEdit(item.id);
+      const opt = document.createElement('option');
+      opt.value = item.id;
+      opt.textContent = `${item.name} (${avail} available)`;
+      if(avail<=0) opt.disabled = true;
+      sel.appendChild(opt);
+    });
+  }
+
+  renderEditItemSelect();
+  renderEditLines();
+
+  td.querySelector('.edit-add-btn').onclick = ()=>{
+    const sel = td.querySelector('.edit-item-select');
+    const itemId = sel.value;
+    const item = inventory.find(i=>i.id===itemId);
+    if(!item){ showToast('Pick an item first'); return; }
+    const avail = availForEdit(item.id);
+    const qtyInput = td.querySelector('.edit-item-qty');
+    let qty = Math.max(1, parseInt(qtyInput.value)||1);
+    if(avail<=0){ showToast('Nothing available for that item'); return; }
+    if(qty > avail){ qty = avail; showToast(`Only ${avail} available`); }
+    const existing = editCart.find(x=>x.itemId===item.id);
+    if(existing){ existing.qty = Math.min(avail, existing.qty+qty); }
+    else { editCart.push({itemId:item.id, name:item.name, qty}); }
+    renderEditLines();
+    renderEditItemSelect();
+  };
+
+  td.querySelector('.edit-cancel-btn').onclick = ()=> editRow.remove();
+
+  td.querySelector('.edit-save-btn').onclick = async ()=>{
+    const saveBtn = td.querySelector('.edit-save-btn');
+    if(editCart.length===0){
+      const ok = await showModal({title:'Mark fully returned?', msg:'No items left in this edit — this will mark the whole checkout as returned instead of updating items.', okText:'Mark returned'});
+      if(!ok) return;
+      saveBtn.disabled = true; saveBtn.textContent = 'Saving…';
+      try{
+        checkouts = await apiWrite(checkoutsUrl(), 'PATCH', {id:c.id}, true);
+        reindexCheckouts();
+        editRow.remove();
+        renderLog();
+        renderInvTable();
+        renderGrid();
+        showToast('Marked returned');
+      }catch(err){
+        handleAdminApiError(err);
+        saveBtn.disabled = false; saveBtn.textContent = 'Save changes';
+      }
+      return;
+    }
+
+    saveBtn.disabled = true; saveBtn.textContent = 'Saving…';
+    try{
+      const result = await apiWrite(checkoutsUrl(), 'PATCH', {id:c.id, action:'updateItems', items:editCart, labName: currentLab.name}, true);
+      checkouts = result.checkouts;
+      reindexCheckouts();
+      editRow.remove();
+      renderLog();
+      renderInvTable();
+      renderGrid();
+      if(result.email_notification && result.email_notification.sent){
+        showToast('Checkout updated — email sent');
+      } else {
+        showToast('Checkout updated — email not sent (' + (result.email_notification && result.email_notification.reason ? result.email_notification.reason : 'check email setup') + ')');
+      }
+    }catch(err){
+      handleAdminApiError(err, 'Something went wrong saving');
+      saveBtn.disabled = false; saveBtn.textContent = 'Save changes';
+    }
+  };
+}
+
+/* ---------- LAB ACCESS (private-by-default: no public listing) ---------- */
+// Used only from authenticated admin contexts (Labs section, admin-account
+// lab pickers) - GET /labs with no `?token=` requires a valid admin session
+// server-side and 401s otherwise, which this treats the same as "nothing to
+// show" rather than surfacing an error for a case that just means "not
+// signed in yet".
+async function fetchLabsSafe(){
+  try{ return await apiGet('/.netlify/functions/labs'); }catch(e){ return []; }
+}
+
+// The only anonymous-accessible lab lookup: resolve exactly one lab by its
+// unguessable access token (what a shared `?lab=` link actually contains).
+// Returns the minimal {id, name, locked} shape, or null if the token is
+// wrong/expired/revoked - never anything that would let someone distinguish
+// "wrong token" from "this lab doesn't exist".
+async function resolveLabFromToken(token){
+  try{
+    const res = await fetch('/.netlify/functions/labs?token=' + encodeURIComponent(token), { cache:'no-store' });
+    if(!res.ok) return null;
+    return await res.json();
+  }catch(e){ return null; }
+}
+
+/* Prompts for a lab's entry passcode. Returns the entered string, or null if cancelled. */
+function promptLabPasscode(labName, isRetry=false){
+  return showModal({
+    title: 'Enter lab passcode',
+    msg: (isRetry ? 'Incorrect passcode. ' : '') + `"${labName}" is locked. Enter the passcode to continue.`,
+    isPassword: true,
+    inputType: 'password',
+    okText: 'Enter',
+    isError: isRetry
+  });
+}
+
+/* Checks a passcode against the server without committing any app state.
+   `urlParam` is whatever should go on `?lab=` for this check - the lab's
+   access token for an anonymous visitor, or its accessToken as looked up
+   from an authenticated admin's own lab listing (see renderAdminLabList) -
+   never a bare id with no token, since that only resolves for an admin
+   already scoped to the lab and this helper is also used before that's
+   established. */
+async function verifyLabPasscode(urlParam, pass){
+  try{
+    const res = await fetch('/.netlify/functions/inventory?lab=' + encodeURIComponent(urlParam), {
+      cache: 'no-store',
+      headers: pass ? {'x-lab-passcode': pass} : {}
+    });
+    return res.ok;
+  }catch(e){ return false; }
+}
+
+const DEFAULT_NO_LAB_MSG = "This app is private per lab — there's no public directory to browse. Use the link your lab administrator shared with you to get in.";
+const INVALID_LINK_MSG = "That link isn't working anymore - it may have been regenerated or the lab removed. Ask your lab administrator for a current link, or sign in as an admin below.";
+
+// `reason` distinguishes "no link was ever given" (default explanation)
+// from "a link WAS given but didn't resolve" (bad/expired/revoked token) -
+// the latter used to only show as a toast that vanished after ~2s, which
+// read as "the page is just broken" rather than explaining what happened.
+// This message now stays on screen until the visitor does something else.
+function showNoLabSelected(reason){
+  document.getElementById('main-view').style.display = 'none';
+  document.getElementById('cart-view').style.display = 'none';
+  document.getElementById('admin-view').style.display = 'none';
+  document.getElementById('cart-fab').style.display = 'none';
+  document.getElementById('topActions').style.display = 'flex';
+  updateTopActionsVisibility();
+  document.getElementById('lab-picker-view').style.display = 'block';
+  document.getElementById('noLabMsg').textContent = reason === 'invalid-link' ? INVALID_LINK_MSG : DEFAULT_NO_LAB_MSG;
+  document.title = 'Supply Checkout';
+  currentLab = { id: null, name: null, accessToken: null, locked: false };
+}
+
+// `lab` is the resolved {id, name, locked} record; `token` is the access
+// token that resolved it (kept explicitly, since the server never echoes a
+// visitor's own token back in the response body - see lib/lab-registry.mjs's
+// publicLab()).
+async function enterLab(lab, token){
+  currentLab = { id: lab.id, name: lab.name || lab.id, accessToken: token || lab.accessToken || null, locked: !!lab.locked };
+  labPasscode = '';
+
+  if(lab.locked){
+    const storageKey = 'labpass:' + lab.id;
+    let stashed = sessionStorage.getItem(storageKey) || '';
+    let ok = stashed ? await verifyLabPasscode(labUrlParam(), stashed) : false;
+    let attempts = 0;
+    while(!ok && attempts < 5){
+      const pass = await promptLabPasscode(currentLab.name, attempts > 0);
+      if(pass === null){
+        history.replaceState(null, '', location.pathname);
+        showNoLabSelected();
+        return;
+      }
+      ok = await verifyLabPasscode(labUrlParam(), pass);
+      if(ok){ stashed = pass; sessionStorage.setItem(storageKey, pass); }
+      attempts++;
+    }
+    if(!ok){
+      showToast('Too many attempts');
+      history.replaceState(null, '', location.pathname);
+      showNoLabSelected();
+      return;
+    }
+    labPasscode = stashed;
+  }
+
+  document.getElementById('lab-picker-view').style.display = 'none';
+  document.getElementById('topActions').style.display = 'flex';
+  updateTopActionsVisibility();
+  document.getElementById('main-view').style.display = 'block';
+  document.getElementById('cart-fab').style.display = 'flex';
+  document.title = currentLab.name + ' — Supply Checkout';
+  document.getElementById('labBrandTitle').textContent = currentLab.name;
+  await loadData();
+  renderChips();
+  renderGrid();
+  renderCart();
+}
+
+/* ---------- init ---------- */
+(async function init(){
+  const params = new URLSearchParams(location.search);
+  const labParam = params.get('lab');
+  const resetToken = params.get('resetToken');
+
+  if(resetToken){
+    // Takes priority over everything else - a reset link is a one-purpose
+    // destination. Strip the token from the URL right away so it can't be
+    // re-submitted by reloading/sharing the address bar after use (the
+    // token is single-use server-side regardless, but there's no reason to
+    // leave a live credential sitting in the URL/history any longer than
+    // needed).
+    history.replaceState(null, '', location.pathname);
+    await showSetNewPasswordModal(resetToken);
+    showNoLabSelected();
+    return;
+  }
+
+  if(labParam){
+    const lab = await resolveLabFromToken(labParam);
+    if(lab){
+      await enterLab(lab, labParam);
+      return;
+    }
+    // Token didn't resolve (bad, expired, or revoked link) - there is no
+    // public directory to fall back to under the private-by-default model,
+    // so this lands on the same screen as no link at all, but with a
+    // specific, persistent explanation instead of a toast that vanishes.
+    history.replaceState(null, '', location.pathname);
+    showNoLabSelected('invalid-link');
+    return;
+  }
+
+  showNoLabSelected();
+})();
+</script>
+</body>
+</html>
