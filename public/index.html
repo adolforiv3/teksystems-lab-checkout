@@ -658,7 +658,7 @@
   <header class="top">
     <div>
       <div class="brand-eyebrow">Admin</div>
-      <div class="brand-title" id="adminBrandTitle">Inventory & Checkout Log</div>
+      <div class="brand-title" id="adminBrandTitle">Lab Inventory & Checkout Log</div>
     </div>
   </header>
   <main>
@@ -672,10 +672,10 @@
         <div class="admin-sidebar-divider"></div>
         <button class="admin-nav-btn" type="button" data-target="addItem">Add Item</button>
         <button class="admin-nav-btn" type="button" data-target="adminAccounts">Admin Accounts</button>
-        <button class="admin-nav-btn" type="button" id="companyInvNavBtn" data-target="companyInventory" style="display:none;">Company Inventory</button>
         <button class="admin-nav-btn" type="button" data-target="assignSupplies">Assign Supplies</button>
         <button class="admin-nav-btn" type="button" data-target="checkoutLog">Checkout Log</button>
-        <button class="admin-nav-btn" type="button" data-target="inventory">Inventory</button>
+        <button class="admin-nav-btn" type="button" data-target="inventory">Lab Inventory</button>
+        <button class="admin-nav-btn" type="button" id="companyInvNavBtn" data-target="companyInventory" style="display:none;">Company Inventory</button>
         <button class="admin-nav-btn" type="button" id="auditLogNavBtn" data-target="auditLog" style="display:none;">Classified Access Log</button>
         <button class="admin-nav-btn" type="button" data-target="labs">Labs</button>
         <button class="admin-nav-btn" type="button" data-target="qrAccess">QR Access</button>
@@ -785,7 +785,7 @@
         </div>
 
         <div class="admin-section" data-admin-section="inventory">
-          <h2>Inventory (<span id="invCount">0</span> items)<button class="btn btn-ghost" id="printAllLabelsBtn" type="button" style="margin-left:auto;">🖨 Print All Labels</button></h2>
+          <h2>Lab Inventory (<span id="invCount">0</span> items)<button class="btn btn-ghost" id="printAllLabelsBtn" type="button" style="margin-left:auto;">🖨 Print All Labels</button></h2>
           <table id="invTable">
             <colgroup>
               <col style="width:24%;">
@@ -2053,7 +2053,7 @@ async function enterAdminView(sectionToShow){
     currentLab = { id: myLabs[0].id, name: myLabs[0].name, accessToken: myLabs[0].accessToken, locked: myLabs[0].locked };
     await loadData();
   }
-  document.getElementById('adminBrandTitle').textContent = (currentLab.name || 'Lab') + ' — Inventory & Checkout Log';
+  document.getElementById('adminBrandTitle').textContent = (currentLab.name || 'Lab') + ' — Lab Inventory & Checkout Log';
 
   const isSuper = adminUser && adminUser.role === 'superadmin';
   document.querySelector('.admin-nav-btn[data-target="adminAccounts"]').style.display = isSuper ? '' : 'none';
@@ -2249,7 +2249,7 @@ function renderAdminLabList(){
         if(isCurrent){
           currentLab.name = newName;
           document.getElementById('labBrandTitle').textContent = currentLab.name;
-          document.getElementById('adminBrandTitle').textContent = currentLab.name + ' — Inventory & Checkout Log';
+          document.getElementById('adminBrandTitle').textContent = currentLab.name + ' — Lab Inventory & Checkout Log';
           document.title = currentLab.name + ' — Supply Checkout';
         }
         renderAdminLabList();
@@ -2301,7 +2301,7 @@ async function switchAdminToLab(lab){
   history.replaceState(null, '', location.pathname + '?lab=' + encodeURIComponent(lab.id));
   document.title = currentLab.name + ' — Supply Checkout';
   document.getElementById('labBrandTitle').textContent = currentLab.name;
-  document.getElementById('adminBrandTitle').textContent = currentLab.name + ' — Inventory & Checkout Log';
+  document.getElementById('adminBrandTitle').textContent = currentLab.name + ' — Lab Inventory & Checkout Log';
   await loadData();
   renderAdminLabList();
   renderQR();
