@@ -282,6 +282,17 @@
     font-weight:600; font-size:13.5px; color:var(--ink); padding:2px 0 0;
   }
   .admin-sidebar-divider{ height:1px; background:var(--border); margin:10px 6px; }
+  /* Groups the sidebar's flat button list into labeled sections (Inventory,
+     Checkouts, Lab Settings, Organization) so it reads as a hierarchy
+     instead of one undifferentiated column - same pattern as Netlify's own
+     project-settings sidebar. Purely a visual grouping, not a
+     collapse/expand widget - every group's items stay visible at once, this
+     just adds a label above each cluster. */
+  .admin-nav-group-label{
+    padding:16px 14px 4px; font-size:11px; font-weight:700; text-transform:uppercase;
+    letter-spacing:.06em; color:var(--ink-soft);
+  }
+  .admin-nav-group-label:first-of-type{ padding-top:8px; }
   .admin-user-info{ padding:2px 14px 6px; font-size:12px; line-height:1.4; color:var(--ink-soft); }
   .admin-user-info b{ color:var(--ink); font-weight:600; }
   .admin-signout-btn{
@@ -530,6 +541,10 @@
     .admin-layout{ flex-direction:column; }
     .admin-sidebar{ flex-direction:row; flex-wrap:wrap; width:100%; position:static; gap:6px; }
     .admin-nav-btn{ flex:1 1 auto; text-align:center; padding:9px 8px; }
+    /* Force each group label onto its own row instead of getting squeezed
+       between buttons in the wrapped flex layout - it still reads as a
+       section break, just full-width instead of sidebar-width. */
+    .admin-nav-group-label{ flex-basis:100%; padding:10px 4px 0; }
   }
 </style>
 </head>
@@ -683,17 +698,24 @@
           <select id="adminLabSwitchSelect" class="mono"></select>
           <div class="admin-lab-switcher-single" id="adminLabSwitcherSingle" style="display:none;"></div>
         </div>
-        <div class="admin-sidebar-divider"></div>
+        <div class="admin-nav-group-label">Inventory</div>
         <button class="admin-nav-btn" type="button" data-target="addItem">Add Item</button>
-        <button class="admin-nav-btn" type="button" data-target="adminAccounts">Admin Accounts</button>
+        <button class="admin-nav-btn" type="button" data-target="inventory">Lab Inventory</button>
+        <button class="admin-nav-btn" type="button" data-target="kits">Kits</button>
+        <button class="admin-nav-btn" type="button" id="auditLogNavBtn" data-target="auditLog" style="display:none;">Classified Access Log</button>
+
+        <div class="admin-nav-group-label">Checkouts</div>
         <button class="admin-nav-btn" type="button" data-target="assignSupplies">Assign Supplies</button>
         <button class="admin-nav-btn" type="button" data-target="checkoutLog">Checkout Log</button>
-        <button class="admin-nav-btn" type="button" data-target="kits">Kits</button>
-        <button class="admin-nav-btn" type="button" data-target="inventory">Lab Inventory</button>
-        <button class="admin-nav-btn" type="button" id="companyInvNavBtn" data-target="companyInventory" style="display:none;">Company Inventory</button>
-        <button class="admin-nav-btn" type="button" id="auditLogNavBtn" data-target="auditLog" style="display:none;">Classified Access Log</button>
+
+        <div class="admin-nav-group-label">Lab Settings</div>
         <button class="admin-nav-btn" type="button" data-target="labs">Labs</button>
         <button class="admin-nav-btn" type="button" data-target="qrAccess">QR Access</button>
+
+        <div class="admin-nav-group-label" id="orgNavGroupLabel" style="display:none;">Organization</div>
+        <button class="admin-nav-btn" type="button" data-target="adminAccounts">Admin Accounts</button>
+        <button class="admin-nav-btn" type="button" id="companyInvNavBtn" data-target="companyInventory" style="display:none;">Company Inventory</button>
+
         <div class="admin-sidebar-divider"></div>
         <div class="admin-user-info" id="adminUserInfo"></div>
         <button class="admin-changepw-btn" type="button" id="changePwBtn">Change Password</button>
@@ -2183,6 +2205,10 @@ async function enterAdminView(sectionToShow){
   const isSuper = adminUser && adminUser.role === 'superadmin';
   document.querySelector('.admin-nav-btn[data-target="adminAccounts"]').style.display = isSuper ? '' : 'none';
   document.getElementById('companyInvNavBtn').style.display = isSuper ? '' : 'none';
+  // The "Organization" group label itself is only meaningful when at least
+  // one of its buttons is showing - a lab-admin should never see a bold
+  // section header sitting above nothing.
+  document.getElementById('orgNavGroupLabel').style.display = isSuper ? '' : 'none';
   if(isSuper){
     allAdmins = await fetchAdminsSafe();
     cancelEditAdmin();
