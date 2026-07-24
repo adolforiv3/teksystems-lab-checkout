@@ -149,6 +149,7 @@
   }
   .item-name{ font-weight:600; font-size:15.5px; line-height:1.3; letter-spacing:-0.01em; }
   .item-attribute{ font-size:12px; color:var(--ink-soft); font-family:monospace; }
+  .item-serial{ font-size:11px; color:var(--ink-soft); opacity:.8; }
   .item-notes{ font-size:12.5px; color:var(--ink-soft); }
   .item-stock{
     font-size:12.5px; color:var(--ink-soft);
@@ -196,11 +197,17 @@
   #cart-view{ display:none; }
   #cart-view main{ max-width:560px; }
   .cart-line{
-    display:flex; justify-content:space-between; align-items:center;
-    padding:12px 0; border-bottom:1px solid var(--border); font-size:14px; gap:8px;
+    display:flex; flex-wrap:wrap; justify-content:space-between; align-items:center;
+    padding:12px 0; border-bottom:1px solid var(--border); font-size:14px; gap:4px 8px;
   }
   .cart-line .cart-name{ flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .cart-line .rm{ background:none; border:none; color:var(--red); cursor:pointer; font-size:18px; line-height:1; flex-shrink:0; }
+  /* Forced onto its own full-width row below the name/qty/remove line via
+     flex-basis:100% (the parent .cart-line is flex-wrap:wrap specifically
+     for this) - attribute/serial are secondary detail, not part of the
+     name a shopper is scanning for, so they shouldn't compete with it or
+     push the qty controls further right. */
+  .cart-line-detail{ flex-basis:100%; font-size:11px; color:var(--ink-soft); order:1; }
   .cart-line-indented{ padding-left:16px; }
   /* A real kit name is bold/dark like any other section header; the
      catch-all "Other Items" bucket for anything not from a kit is styled
@@ -1780,6 +1787,7 @@ function buildItemCard(item){
     <div class="item-cat mono" style="color:${col.solid}">${item.category||'uncategorized'}</div>
     <div class="item-name">${item.name}</div>
     ${item.attribute ? `<div class="item-attribute">${escapeAttr(item.attribute)}</div>` : ''}
+    ${item.serialNumber ? `<div class="item-serial mono">SN ${escapeAttr(item.serialNumber)}</div>` : ''}
     ${item.notes ? `<div class="item-notes">${item.notes}</div>` : ''}
     <div class="item-stock">
       <span>available</span>
@@ -2012,6 +2020,10 @@ async function refreshAndReconcileCart(){
 function buildCartLine(c, idx, indented){
   const item = inventory.find(i=>i.id===c.itemId);
   const avail = item ? availableQty(item) : c.qty;
+  // Attribute (color/brand/SKU) and serial number, when the item has them -
+  // shown so a shopper can actually verify they're grabbing the right
+  // physical unit before confirming checkout, not just the right name.
+  const details = item ? [item.attribute, item.serialNumber ? `SN ${item.serialNumber}` : ''].filter(Boolean).join(' · ') : '';
   const line = document.createElement('div');
   line.className = 'cart-line' + (indented ? ' cart-line-indented' : '');
   line.innerHTML = `
@@ -2022,6 +2034,7 @@ function buildCartLine(c, idx, indented){
       <button class="qty-btn plus" type="button" ${c.qty>=avail?'disabled':''}>+</button>
     </div>
     <button class="rm">✕</button>
+    ${details ? `<div class="cart-line-detail mono">${escapeAttr(details)}</div>` : ''}
   `;
   line.querySelector('.minus').onclick = ()=> updateCartQty(idx, -1);
   line.querySelector('.plus').onclick = ()=> updateCartQty(idx, 1);
