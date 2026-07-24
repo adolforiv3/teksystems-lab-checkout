@@ -4,6 +4,7 @@ import { resolveLab } from "./lib/lab-registry.mjs";
 import { updateJSON, ConcurrentWriteError } from "./lib/occ.mjs";
 import { sendEmail } from "./lib/email.mjs";
 import { checkLowStockAndNotify, availableQty } from "./lib/lowstock.mjs";
+import { computePendingHolds, claimableQty } from "./lib/holds.mjs";
 import { json, withErrorBoundary } from "./lib/http.mjs";
 
 class ApiError extends Error {
@@ -165,18 +166,21 @@ export default withErrorBoundary(async (req) => {
 
         // The client only ever saw a snapshot of "available" stock from
         // whenever it last loaded the page - by the time this request
-        // lands, someone else may have taken the last one. This check runs
-        // fresh on every retry attempt (inventory + checkouts are both
-        // re-read each time), so it's checking real current state, not
-        // what the shopper's browser thought was true a minute ago.
-        // Admins keep the ability to over-allocate deliberately (e.g.
-        // logging historical/backdated checkouts), matching the existing
-        // backdating privilege above.
+        // lands, someone else may have taken the last one, or a DRI/another
+        // lab may have claimed it via a still-pending source request or
+        // transfer proposal in the meantime. This check runs fresh on every
+        // retry attempt (inventory, checkouts, and holds are all re-read
+        // each time), so it's checking real current state, not what the
+        // shopper's browser thought was true a minute ago. Admins keep the
+        // ability to over-allocate deliberately (e.g. logging
+        // historical/backdated checkouts, or consciously overriding a hold),
+        // matching the existing backdating privilege above.
         if (!isAdminForLab) {
           const inventory = (await store.get("inventory", { type: "json" })) || [];
+          const holds = await computePendingHolds(labId);
           for (const reqItem of record.items) {
             const invItem = inventory.find((i) => i.id === reqItem.itemId);
-            const available = invItem ? availableQty(invItem, checkouts) : 0;
+            const available = invItem ? claimableQty(invItem, availableQty(invItem, checkouts), holds) : 0;
             if (reqItem.qty > available) {
               throw new ApiError(`not enough "${reqItem.name}" available (${available} left)`, 409);
             }

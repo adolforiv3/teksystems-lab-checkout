@@ -3,6 +3,7 @@ import { labStore, transfersStore, labRegistryStore } from "./lib/stores.mjs";
 import { loadLabsForRead } from "./lib/lab-registry.mjs";
 import { updateJSON, ConcurrentWriteError } from "./lib/occ.mjs";
 import { availableQty, checkLowStockAndNotify } from "./lib/lowstock.mjs";
+import { computePendingHolds } from "./lib/holds.mjs";
 import { sendEmail } from "./lib/email.mjs";
 import { json, withErrorBoundary } from "./lib/http.mjs";
 
@@ -111,6 +112,11 @@ export default withErrorBoundary(async (req) => {
         const sourceStore = labStore(sourceLabId);
         const inventory = (await sourceStore.get("inventory", { type: "json" })) || [];
         const checkouts = (await sourceStore.get("checkouts", { type: "json" })) || [];
+        // Excludes anything already claimed by a pending client source
+        // request or another pending send proposal from this same lab, so
+        // this lab can't propose sending units it's already promised
+        // somewhere else.
+        const holds = await computePendingHolds(sourceLabId);
         const seen = new Set();
         items = [];
         for (const raw of body.items) {
@@ -119,7 +125,7 @@ export default withErrorBoundary(async (req) => {
           if (!(typeof qty === "number" && qty > 0)) return json({ error: "each item needs a positive qty" }, 400);
           const invItem = inventory.find((i) => i.id === raw.itemId);
           if (!invItem) return json({ error: "item not found" }, 404);
-          const avail = availableQty(invItem, checkouts);
+          const avail = Math.max(0, availableQty(invItem, checkouts) - (holds.get(invItem.id) || 0));
           if (qty > avail) return json({ error: `not enough "${invItem.name}" available (${avail} left)` }, 409);
           if (seen.has(raw.itemId)) continue;
           seen.add(raw.itemId);
@@ -348,11 +354,18 @@ export default withErrorBoundary(async (req) => {
           await updateJSON(sourceStoreRef, "inventory", async (current) => {
             const inv = current || [];
             const checkouts = (await sourceStoreRef.get("checkouts", { type: "json" })) || [];
+            // This transfer already flipped to "accepted" in the previous
+            // step, so it no longer counts as a "pending" hold itself here -
+            // what's left is everyone ELSE's still-pending claim (another
+            // DRI request, another pending transfer) that may have shown up
+            // against this same item in the time between this transfer being
+            // proposed and actually being accepted.
+            const holds = await computePendingHolds(transferSnapshot.sourceLabId);
             resolvedMoves = [];
             for (const m of moves) {
               const item = inv.find((i) => i.id === m.itemId);
               if (!item) throw new ApiError("an item in this transfer no longer exists at the source", 409);
-              const avail = availableQty(item, checkouts);
+              const avail = Math.max(0, availableQty(item, checkouts) - (holds.get(item.id) || 0));
               if (m.qty > avail) {
                 throw new ApiError(`not enough "${item.name}" available at the source now (${avail} left)`, 409);
               }

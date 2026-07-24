@@ -158,6 +158,7 @@
   }
   .stock-num{ font-weight:700; color:var(--ink); }
   .stock-num.zero{ color:var(--red); }
+  .item-reserved{ font-size:11px; color:var(--amber, #b45309); margin-top:-2px; }
   .add-row{ display:flex; gap:8px; align-items:center; }
   .qty-input{ width:76px; text-align:center; padding:8px 6px 8px 12px; font-size:18px; font-weight:700; color:var(--ink); }
   .btn{
@@ -1838,8 +1839,22 @@ async function loadData(){
 function checkedOutQty(itemId){
   return checkedOutIndex.get(itemId) || 0;
 }
+// The server now computes `available` itself (qty, minus checked-out, minus
+// whatever's already claimed by someone else's pending DRI request or
+// lab-to-lab transfer proposal - see inventory.mjs) so two different
+// parties can't both be shown, and both able to claim, the same units.
+// Falls back to the old checkout-only math if a caller ever hands this an
+// item that didn't come from the server (shouldn't happen in practice).
 function availableQty(item){
+  if(typeof item.available === 'number') return item.available;
   return Math.max(0, item.qty - checkedOutQty(item.id));
+}
+// Units that are on-hand and not checked out, but also not claimable right
+// now because someone else's pending request/transfer already has dibs on
+// them - purely for a shopper-facing "some reserved" hint, never used to
+// gate anything (the actual gate is availableQty()/the server's own check).
+function reservedQty(item){
+  return Math.max(0, item.qty - checkedOutQty(item.id) - availableQty(item));
 }
 
 function renderChips(){
@@ -1870,6 +1885,7 @@ function renderChips(){
 
 function buildItemCard(item){
   const avail = availableQty(item);
+  const reserved = reservedQty(item);
   const card = document.createElement('div');
   card.className = 'item-card' + (avail===0 ? ' out':'');
   const col = categoryColor(item.category);
@@ -1884,6 +1900,7 @@ function buildItemCard(item){
       <span>available</span>
       <span class="stock-num ${avail===0?'zero':''}">${avail} / ${item.qty}</span>
     </div>
+    ${reserved > 0 ? `<div class="item-reserved" title="Already claimed by a pending request or transfer to another team - not available to take right now.">${reserved} reserved for another request</div>` : ''}
     <div class="add-row">
       <input type="number" class="qty-input mono" min="1" max="${avail}" value="${avail>0?1:0}" ${avail===0?'disabled':''}>
       <button class="btn btn-teal" style="flex:1" ${avail===0?'disabled':''}>Add to cart</button>

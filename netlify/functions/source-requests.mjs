@@ -2,6 +2,8 @@ import { resolveAdmin, canAccessLab, isSuperadmin, isClient, loadAdmins, findByU
 import { labStore, sourceRequestsStore, labRegistryStore } from "./lib/stores.mjs";
 import { loadLabsForRead } from "./lib/lab-registry.mjs";
 import { updateJSON, ConcurrentWriteError } from "./lib/occ.mjs";
+import { availableQty } from "./lib/lowstock.mjs";
+import { computePendingSendTransferHolds } from "./lib/holds.mjs";
 import { sendEmail } from "./lib/email.mjs";
 import { json, withErrorBoundary } from "./lib/http.mjs";
 
@@ -137,7 +139,39 @@ export default withErrorBoundary(async (req) => {
         requestedAt: nowIso,
         history: [{ at: nowIso, action: "requested", by: admin.username || admin.id, note }],
       };
-      const list = await updateJSON(store, "requests", async (current) => [...(current || []), record]);
+      const list = await updateJSON(store, "requests", async (current) => {
+        const arr = current || [];
+
+        // Re-validated fresh on every attempt, including retries triggered
+        // by a *different* concurrent request landing first - so two DRIs
+        // (or a DRI and an in-flight transfer) can't both successfully claim
+        // more than what's actually still left. Item/checkout state is a
+        // plain read (not itself OCC-protected here), but the piece that
+        // matters for "two requests race for the last one" - other pending
+        // requests against this same item - comes straight from `arr`, the
+        // exact array this attempt is about to write, so it always reflects
+        // anything that won a previous attempt.
+        const [checkoutsNow, invNow, transferHolds] = await Promise.all([
+          labStore(foundLab.id).get("checkouts", { type: "json" }),
+          labStore(foundLab.id).get("inventory", { type: "json" }),
+          computePendingSendTransferHolds(foundLab.id),
+        ]);
+        const itemNow = (invNow || []).find((i) => i.id === foundItem.id);
+        if (!itemNow) throw new ApiError("item no longer exists", 404);
+        const otherRequestHold = arr
+          .filter((r) => r.status === "pending" && r.itemId === foundItem.id)
+          .reduce((sum, r) => sum + r.qty, 0);
+        const totalHold = otherRequestHold + (transferHolds.get(foundItem.id) || 0);
+        const trueAvailable = Math.max(0, availableQty(itemNow, checkoutsNow || []) - totalHold);
+        if (body.qty > trueAvailable) {
+          throw new ApiError(
+            `not enough "${foundItem.name}" available to request (${trueAvailable} left - some may already be claimed by another pending request or transfer)`,
+            409
+          );
+        }
+
+        return [...arr, record];
+      });
 
       await notifyLabAdmins(
         foundLab.id,
