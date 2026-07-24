@@ -1023,8 +1023,7 @@
           </div>
           <table id="invTable">
             <colgroup>
-              <col style="width:4%;">
-              <col style="width:38%;">
+              <col style="width:42%;">
               <col style="width:9%;">
               <col style="width:10%;">
               <col style="width:9%;">
@@ -1032,7 +1031,7 @@
               <col style="width:11%;">
               <col style="width:9%;">
             </colgroup>
-            <thead><tr><th><input type="checkbox" id="invSelectAllCheck" title="Select every visible item"></th><th>Name</th><th>Notes</th><th>Total Qty</th><th>Checked Out</th><th>Alert At</th><th>QR</th><th></th></tr></thead>
+            <thead><tr><th>Name</th><th>Notes</th><th>Total Qty</th><th>Checked Out</th><th>Alert At</th><th>QR <input type="checkbox" id="invSelectAllCheck" title="Select every visible item to print"></th><th></th></tr></thead>
             <tbody></tbody>
           </table>
         </div>
@@ -4737,7 +4736,6 @@ function buildInvRow(item){
   const catCol = categoryColor(item.category);
   const tr = document.createElement('tr');
   tr.innerHTML = `
-    <td><input type="checkbox" class="invRowCheck" ${selectedInvItemIds.has(item.id) ? 'checked' : ''}></td>
     <td style="min-width:260px;">
       <input type="text" value="${escapeAttr(item.name)}" class="nameEdit mono" style="width:100%;min-width:200px;">
       ${item.onHold > 0 ? `<div style="margin-top:6px;"><span class="badge active" title="Claimed by a pending client source request or an outgoing transfer proposal - still fully in stock until that's actually accepted/fulfilled.">⏳ ${item.onHold} on hold</span></div>` : ''}
@@ -4771,7 +4769,12 @@ function buildInvRow(item){
     <td class="mono"><input type="number" min="0" value="${item.qty}" class="qtyEdit mono num-cell"></td>
     <td class="mono"><span class="num-cell-display">${out}</span></td>
     <td class="mono"><input type="number" min="0" value="${item.lowStockThreshold || ''}" placeholder="off" class="thresholdEdit mono num-cell" title="Email lab admins when available stock drops to or below this number. Leave blank to disable."></td>
-    <td><button class="btn btn-ghost qrLabelBtn" type="button">label</button></td>
+    <td style="white-space:nowrap;">
+      <span style="display:inline-flex;align-items:center;gap:5px;">
+        <input type="checkbox" class="invRowCheck" title="Select for bulk/category printing" ${selectedInvItemIds.has(item.id) ? 'checked' : ''}>
+        <button class="btn btn-ghost qrLabelBtn" type="button" title="Print just this one label">label</button>
+      </span>
+    </td>
     <td><button class="del-btn">delete</button></td>
   `;
   tr.querySelector('.qrLabelBtn').onclick = ()=> printItemQR(item);
@@ -4948,13 +4951,13 @@ function renderInvTable(){
 
   const selectAllCheck = document.getElementById('invSelectAllCheck');
   if(inventory.length===0){
-    tbody.innerHTML = '<tr><td colspan="8" class="empty">No items yet — add some above.</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="7" class="empty">No items yet — add some above.</td></tr>';
     selectAllCheck.checked = false;
     updatePrintSelectedButton();
     return;
   }
   if(visible.length===0){
-    tbody.innerHTML = '<tr><td colspan="8" class="empty">No items match that search.</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="7" class="empty">No items match that search.</td></tr>';
     selectAllCheck.checked = false;
     updatePrintSelectedButton();
     return;
@@ -4984,7 +4987,7 @@ function renderInvTable(){
     const collapsed = !invSearchTerm && collapsedInvCats.has(cat);
     const groupRow = document.createElement('tr');
     groupRow.innerHTML = `
-      <td colspan="8" class="cat-group-row collapsible${collapsed?' collapsed':''}" style="border-left:5px solid ${col.solid};background:${col.tint};color:${col.solid};">
+      <td colspan="7" class="cat-group-row collapsible${collapsed?' collapsed':''}" style="border-left:5px solid ${col.solid};background:${col.tint};color:${col.solid};">
         <span class="cat-group-chevron">▾</span>${escapeAttr(cat)} <span class="mono cat-group-count">(${groups[cat].length})</span>
         <button type="button" class="btn btn-ghost cat-print-btn" style="margin-left:auto;padding:3px 10px;font-size:11.5px;" title="Print labels for every item in ${escapeAttr(cat)}">🖨 Print category</button>
       </td>`;
