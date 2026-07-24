@@ -384,6 +384,12 @@
     letter-spacing:.05em;
     border-bottom:1px solid var(--border); padding:12px 12px; border-radius:var(--r-sm);
   }
+  .cat-group-row.collapsible{ cursor:pointer; user-select:none; }
+  .cat-group-chevron{
+    display:inline-block; margin-right:6px; transition:transform .15s ease;
+    font-size:10px; opacity:.75;
+  }
+  .cat-group-row.collapsed .cat-group-chevron{ transform:rotate(-90deg); }
   .cat-group-count{ font-weight:400; color:var(--ink-soft); text-transform:none; letter-spacing:0; }
   .cat-dot{ width:8px; height:8px; border-radius:50%; flex-shrink:0; display:inline-block; }
   .cat-label{ font-size:12.5px; color:var(--ink-soft); }
@@ -1010,6 +1016,11 @@
 
         <div class="admin-section" data-admin-section="inventory">
           <h2>Lab Inventory (<span id="invCount">0</span> items)<button class="btn btn-ghost" id="printAllLabelsBtn" type="button" style="margin-left:auto;">🖨 Print All Labels</button></h2>
+          <div style="display:flex; gap:8px; align-items:center; margin-bottom:12px;">
+            <input type="text" id="invSearch" class="mono" placeholder="search items, categories, attributes, serial #…" style="flex:1;max-width:360px;">
+            <button class="btn btn-ghost" id="invCollapseAllBtn" type="button">Collapse all</button>
+            <button class="btn btn-ghost" id="invExpandAllBtn" type="button">Expand all</button>
+          </div>
           <table id="invTable">
             <colgroup>
               <col style="width:42%;">
@@ -4795,17 +4806,33 @@ function buildInvRow(item){
   return tr;
 }
 
+// Collapsed-state persists across re-renders (a save, a poll refresh, a
+// search keystroke) by category NAME, not by any per-render index - so
+// toggling "Tools" closed stays closed through everything short of an
+// explicit expand, matching how a real accordion behaves.
+let collapsedInvCats = new Set();
+let invSearchTerm = "";
+
 function renderInvTable(){
   document.getElementById('invCount').textContent = inventory.length;
   const tbody = document.querySelector('#invTable tbody');
   tbody.innerHTML = "";
+
+  // See looseSearchMatch above - same multi-word/synonym/typo-tolerant
+  // engine as every other item search box in the app.
+  const visible = invSearchTerm ? inventory.filter(i=> looseSearchMatch(itemSearchText(i), invSearchTerm)) : inventory;
+
   if(inventory.length===0){
     tbody.innerHTML = '<tr><td colspan="7" class="empty">No items yet — add some above.</td></tr>';
     return;
   }
+  if(visible.length===0){
+    tbody.innerHTML = '<tr><td colspan="7" class="empty">No items match that search.</td></tr>';
+    return;
+  }
 
   const groups = {};
-  inventory.forEach(item=>{
+  visible.forEach(item=>{
     const cat = (item.category || '').trim() || 'Uncategorized';
     (groups[cat] = groups[cat] || []).push(item);
   });
@@ -4816,13 +4843,37 @@ function renderInvTable(){
   });
 
   catNames.forEach(cat=>{
-    const groupRow = document.createElement('tr');
     const col = categoryColor(cat === 'Uncategorized' ? '' : cat);
-    groupRow.innerHTML = `<td colspan="7" class="cat-group-row" style="border-left:5px solid ${col.solid};background:${col.tint};color:${col.solid};">${escapeAttr(cat)} <span class="mono cat-group-count">(${groups[cat].length})</span></td>`;
+    // A search that's actively narrowing things down auto-expands every
+    // matching group - collapsing a category to make room only to have a
+    // search hide the very thing you're looking for inside it would defeat
+    // the point of searching at all.
+    const collapsed = !invSearchTerm && collapsedInvCats.has(cat);
+    const groupRow = document.createElement('tr');
+    groupRow.innerHTML = `<td colspan="7" class="cat-group-row collapsible${collapsed?' collapsed':''}" style="border-left:5px solid ${col.solid};background:${col.tint};color:${col.solid};"><span class="cat-group-chevron">▾</span>${escapeAttr(cat)} <span class="mono cat-group-count">(${groups[cat].length})</span></td>`;
+    groupRow.querySelector('.cat-group-row').onclick = ()=>{
+      if(collapsedInvCats.has(cat)) collapsedInvCats.delete(cat);
+      else collapsedInvCats.add(cat);
+      renderInvTable();
+    };
     tbody.appendChild(groupRow);
-    groups[cat].forEach(item=> tbody.appendChild(buildInvRow(item)));
+    if(!collapsed){
+      groups[cat].forEach(item=> tbody.appendChild(buildInvRow(item)));
+    }
   });
 }
+document.getElementById('invSearch').addEventListener('input', debounce((e)=>{
+  invSearchTerm = e.target.value.trim();
+  renderInvTable();
+}, 150));
+document.getElementById('invCollapseAllBtn').onclick = ()=>{
+  collapsedInvCats = new Set(inventory.map(i=> (i.category||'').trim() || 'Uncategorized'));
+  renderInvTable();
+};
+document.getElementById('invExpandAllBtn').onclick = ()=>{
+  collapsedInvCats = new Set();
+  renderInvTable();
+};
 
 function statusOf(c){
   const allReturned = c.items.every(it=>it.returned);
