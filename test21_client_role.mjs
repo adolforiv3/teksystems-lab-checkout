@@ -55,7 +55,7 @@ const multimeter = r.data.find((i) => i.name === "Multimeter");
 r = await call(inventoryMod, "POST", "/inventory?lab=" + labTwoId, { headers: { "x-admin-token": lab2Token }, body: { name: "Cable Tester", qty: 4, category: "Tools" } });
 const cableTester = r.data.find((i) => i.name === "Cable Tester");
 
-// an item carrying both an attribute and a serial number, to check the allowlist keeps one and drops the other
+// an item carrying both an attribute and a serial number, to check the allowlist passes both through
 await call(inventoryMod, "POST", "/inventory?lab=groomlake", { headers: { "x-admin-token": lab1Token }, body: { name: "Secret Widget", qty: 5, attribute: "Red", serialNumber: "SN-42" } });
 
 // === Admin Accounts: creating/editing a client DRI account ===
@@ -100,7 +100,7 @@ assert(catalog.some((i) => i.name === "Multimeter") && catalog.some((i) => i.nam
 
 const catalogMultimeter = catalog.find((i) => i.name === "Multimeter");
 assert(
-  !("labId" in catalogMultimeter) && !("labName" in catalogMultimeter) && !("notes" in catalogMultimeter) && !("lowStockThreshold" in catalogMultimeter) && !("serialNumber" in catalogMultimeter),
+  !("labId" in catalogMultimeter) && !("labName" in catalogMultimeter) && !("notes" in catalogMultimeter) && !("lowStockThreshold" in catalogMultimeter),
   "a client's catalog row never carries lab identity or any of the other allowlist-excluded fields, even though the underlying item has notes"
 );
 assert(catalogMultimeter.qty === 10 && catalogMultimeter.available === 10 && catalogMultimeter.category === "Tools", "the fields a client IS allowed - name/category/qty/available - are still present and correct");
@@ -108,7 +108,7 @@ assert(catalogMultimeter.qty === 10 && catalogMultimeter.available === 10 && cat
 const catalogSecret = catalog.find((i) => i.name === "Secret Widget");
 assert(!!catalogSecret, "the item shows up in a client's catalog");
 assert(catalogSecret.attribute === "Red", "the utilitarian attribute field IS in the client allowlist - useful for telling similar items apart");
-assert(!("serialNumber" in catalogSecret), "a client never learns an item's serial number - stays admin-only");
+assert(catalogSecret.serialNumber === "SN-42", "serial number IS in the client allowlist too - a DRI needs to verify the exact physical unit they're requesting, same as a shopper checking one out sees");
 
 r = await call(labsMod, "GET", "/labs?directory=1", { headers: { "x-admin-token": driBToken } });
 assert(r.status === 200 && r.data.length === 0, "a client has no admin authority over any lab, so the cross-company lab-name directory (normally visible to any labadmin, e.g. to pick a transfer counterparty) hands back nothing for a client");

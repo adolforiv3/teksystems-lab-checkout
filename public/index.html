@@ -2580,7 +2580,7 @@ function addToClientCart(item, qty){
   if(existing){
     existing.qty = Math.min(item.available, existing.qty + qty);
   } else {
-    clientCart.push({itemId: item.id, name: item.name, available: item.available, qty: Math.min(item.available, qty)});
+    clientCart.push({itemId: item.id, name: item.name, attribute: item.attribute||'', serialNumber: item.serialNumber||'', available: item.available, qty: Math.min(item.available, qty)});
   }
   updateClientCartChipCount();
 }
@@ -2594,6 +2594,7 @@ function buildClientItemCard(item){
     <div class="item-cat mono" style="color:${col.solid}">${item.category||'uncategorized'}</div>
     <div class="item-name">${item.name}</div>
     ${item.attribute ? `<div class="item-attribute">${escapeAttr(item.attribute)}</div>` : ''}
+    ${item.serialNumber ? `<div class="item-serial mono">SN ${escapeAttr(item.serialNumber)}</div>` : ''}
     <div class="item-stock">
       <span>available</span>
       <span class="stock-num ${item.available===0?'zero':''}">${item.available} / ${item.qty}</span>
@@ -2658,9 +2659,17 @@ function renderClientCartLines(){
   submitBtn.disabled = false;
   wrap.innerHTML = '';
   clientCart.forEach((line, idx)=>{
+    // Same detail a shopper's own cart shows (see buildCartLine) - a DRI
+    // needs to verify the exact physical unit they're requesting too, not
+    // just the item name.
+    const details = [line.attribute, line.serialNumber ? `SN ${line.serialNumber}` : ''].filter(Boolean).join(' · ');
     const row = document.createElement('div');
     row.className = 'cart-line';
-    row.innerHTML = `<span class="cart-name">${escapeAttr(line.name)} <span class="mono" style="color:var(--ink-soft)">×${line.qty}</span></span><button class="rm">✕</button>`;
+    row.innerHTML = `
+      <span class="cart-name">${escapeAttr(line.name)} <span class="mono" style="color:var(--ink-soft)">×${line.qty}</span></span>
+      <button class="rm">✕</button>
+      ${details ? `<div class="cart-line-detail mono">${escapeAttr(details)}</div>` : ''}
+    `;
     row.querySelector('.rm').onclick = ()=>{
       clientCart.splice(idx, 1);
       updateClientCartChipCount();

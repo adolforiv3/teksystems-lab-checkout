@@ -25,13 +25,15 @@ function sortInventory(inventory) {
 // this is deliberately an *allowlist*, not a blocklist: a blocklist only
 // protects against the fields it was written to know about, so a field
 // added to the item shape later (or anything already here that's really
-// just internal shorthand, like admin-authored notes, low-stock
-// thresholds, or serial numbers) would leak to an external client by
-// default instead of by decision. An allowlist can't drift that way - a
-// new field is invisible to a client until someone deliberately adds it
-// here. Lab/project identity isn't handled here at all, since it's simply
-// never attached to a client-facing row in the first place (see the ?all=1
-// client branch below).
+// just internal shorthand, like admin-authored notes or low-stock
+// thresholds) would leak to an external client by default instead of by
+// decision. An allowlist can't drift that way - a new field is invisible to
+// a client until someone deliberately adds it here. serialNumber is
+// included on purpose: a DRI needs to verify the exact physical unit
+// they're requesting, same as a shopper checking one out sees. Lab/project
+// identity isn't handled here at all, since it's simply never attached to a
+// client-facing row in the first place (see the ?all=1 client branch
+// below).
 function sanitizeItemForRole(item, role) {
   if (role !== "client") return item;
   return {
@@ -39,6 +41,7 @@ function sanitizeItemForRole(item, role) {
     name: item.name,
     category: item.category || "",
     attribute: item.attribute || "",
+    serialNumber: item.serialNumber || "",
     qty: item.qty,
     available: item.available,
   };
