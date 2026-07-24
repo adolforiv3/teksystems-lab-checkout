@@ -1,4 +1,4 @@
-import { sourceRequestsStore, transfersStore } from "./stores.mjs";
+import { sourceRequestsStore, transfersStore, cartHoldsStore } from "./stores.mjs";
 
 // How much of each item is currently claimed by a pending client source
 // request, keyed by the lab that request is against. Doesn't touch real
@@ -37,21 +37,48 @@ export async function computePendingSendTransferHolds(labId) {
   return holds;
 }
 
+// Not yet a request or a transfer at all - just "someone's browser has this
+// many of this item sitting in an unsubmitted cart right now" (see
+// cart-holds.mjs). Short-lived and self-expiring: a hold whose `expiresAt`
+// has already passed is treated as if it were never written, no separate
+// cleanup pass required. `excludeSessionId` is for the one caller who
+// legitimately already "has" these units in their own cart and is about to
+// convert that into a real claim (a checkout or a source request) - without
+// it, a shopper's own reservation would count against their own checkout and
+// block them from claiming the very units they already have.
+export async function computeCartHolds(labId, { excludeSessionId } = {}) {
+  const holds = new Map();
+  const now = Date.now();
+  const records = (await cartHoldsStore().get("holds", { type: "json" })) || [];
+  for (const rec of records) {
+    if (rec.labId !== labId) continue;
+    if (excludeSessionId && rec.sessionId === excludeSessionId) continue;
+    if (new Date(rec.expiresAt).getTime() <= now) continue;
+    holds.set(rec.itemId, (holds.get(rec.itemId) || 0) + rec.qty);
+  }
+  return holds;
+}
+
 // Combined view: every unit of every item in this lab that's currently
 // spoken for by *something* other than an actual checkout - a pending client
-// request, or a pending outgoing transfer proposal. This is the single
-// source of truth every write path (checkouts, source-requests, transfers)
-// and every read path (inventory's per-lab listing, the DRI catalog) uses to
-// decide what's really still claimable, so two different parties can't both
-// successfully claim the same stock.
-export async function computePendingHolds(labId) {
+// request, a pending outgoing transfer proposal, or someone else's
+// unsubmitted cart. This is the single source of truth every write path
+// (checkouts, source-requests, transfers) and every read path (inventory's
+// per-lab listing, the DRI catalog) uses to decide what's really still
+// claimable, so two different parties can't both successfully claim the
+// same stock.
+export async function computePendingHolds(labId, { excludeSessionId } = {}) {
   try {
-    const [requestHolds, transferHolds] = await Promise.all([
+    const [requestHolds, transferHolds, cartHolds] = await Promise.all([
       computePendingRequestHolds(labId),
       computePendingSendTransferHolds(labId),
+      computeCartHolds(labId, { excludeSessionId }),
     ]);
     const holds = new Map(requestHolds);
     for (const [itemId, qty] of transferHolds) {
+      holds.set(itemId, (holds.get(itemId) || 0) + qty);
+    }
+    for (const [itemId, qty] of cartHolds) {
       holds.set(itemId, (holds.get(itemId) || 0) + qty);
     }
     return holds;

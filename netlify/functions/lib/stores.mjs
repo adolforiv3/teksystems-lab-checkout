@@ -44,3 +44,12 @@ export function transfersStore() {
 export function sourceRequestsStore() {
   return getStore({ name: "source-requests", consistency: "strong" });
 }
+// Ephemeral, short-TTL "I have this in my cart right now" reservations - a
+// shopper or DRI hasn't committed to anything yet, but two people staring at
+// the same item shouldn't both be able to build a cart around the last one.
+// Same cross-lab reasoning as transfersStore/sourceRequestsStore above (a
+// DRI's cart can span every lab), plus these expire on their own (see
+// lib/holds.mjs) so an abandoned tab doesn't lock stock forever.
+export function cartHoldsStore() {
+  return getStore({ name: "cart-holds", consistency: "strong" });
+}

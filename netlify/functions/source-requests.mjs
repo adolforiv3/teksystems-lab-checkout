@@ -1,9 +1,9 @@
 import { resolveAdmin, canAccessLab, isSuperadmin, isClient, loadAdmins, findByUsername } from "./lib/auth.mjs";
-import { labStore, sourceRequestsStore, labRegistryStore } from "./lib/stores.mjs";
+import { labStore, sourceRequestsStore, labRegistryStore, cartHoldsStore } from "./lib/stores.mjs";
 import { loadLabsForRead } from "./lib/lab-registry.mjs";
 import { updateJSON, ConcurrentWriteError } from "./lib/occ.mjs";
 import { availableQty } from "./lib/lowstock.mjs";
-import { computePendingSendTransferHolds } from "./lib/holds.mjs";
+import { computePendingSendTransferHolds, computeCartHolds } from "./lib/holds.mjs";
 import { sendEmail } from "./lib/email.mjs";
 import { json, withErrorBoundary } from "./lib/http.mjs";
 
@@ -103,6 +103,10 @@ export default withErrorBoundary(async (req) => {
         return json({ error: "a positive qty is required" }, 400);
       }
       const note = typeof body.note === "string" ? body.note.trim() : "";
+      // See checkouts.mjs - the same cart-hold exclusion so a DRI's own
+      // still-in-cart reservation on this item doesn't count against the
+      // very request that's about to convert it into a real one.
+      const sessionId = typeof body.sessionId === "string" ? body.sessionId.trim() : "";
 
       // The client never told us (and never could - see inventory.mjs's
       // client catalog branch, which never attaches lab identity to a row)
@@ -151,17 +155,19 @@ export default withErrorBoundary(async (req) => {
         // requests against this same item - comes straight from `arr`, the
         // exact array this attempt is about to write, so it always reflects
         // anything that won a previous attempt.
-        const [checkoutsNow, invNow, transferHolds] = await Promise.all([
+        const [checkoutsNow, invNow, transferHolds, cartHolds] = await Promise.all([
           labStore(foundLab.id).get("checkouts", { type: "json" }),
           labStore(foundLab.id).get("inventory", { type: "json" }),
           computePendingSendTransferHolds(foundLab.id),
+          computeCartHolds(foundLab.id, { excludeSessionId: sessionId || undefined }),
         ]);
         const itemNow = (invNow || []).find((i) => i.id === foundItem.id);
         if (!itemNow) throw new ApiError("item no longer exists", 404);
         const otherRequestHold = arr
           .filter((r) => r.status === "pending" && r.itemId === foundItem.id)
           .reduce((sum, r) => sum + r.qty, 0);
-        const totalHold = otherRequestHold + (transferHolds.get(foundItem.id) || 0);
+        const totalHold =
+          otherRequestHold + (transferHolds.get(foundItem.id) || 0) + (cartHolds.get(foundItem.id) || 0);
         const trueAvailable = Math.max(0, availableQty(itemNow, checkoutsNow || []) - totalHold);
         if (body.qty > trueAvailable) {
           throw new ApiError(
@@ -172,6 +178,23 @@ export default withErrorBoundary(async (req) => {
 
         return [...arr, record];
       });
+
+      // This one line just turned into a real request - its cart-hold
+      // reservation is now redundant with computePendingRequestHolds itself
+      // counting the new record, and would otherwise double the hold on this
+      // item until it expires. Only this item, not the whole session: a DRI
+      // submitting a multi-item cart does one POST per line (see
+      // clientCartSubmitBtn in index.html), and the other lines' holds are
+      // still legitimately pending. Best-effort, same as checkouts.mjs.
+      if (sessionId) {
+        try {
+          await updateJSON(cartHoldsStore(), "holds", async (current) =>
+            (current || []).filter((rec) => !(rec.sessionId === sessionId && rec.itemId === foundItem.id))
+          );
+        } catch (e) {
+          console.error(`source-requests: failed to clear cart hold for session "${sessionId}" item "${foundItem.id}" (non-fatal):`, e);
+        }
+      }
 
       await notifyLabAdmins(
         foundLab.id,

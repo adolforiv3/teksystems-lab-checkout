@@ -1,5 +1,5 @@
 import { resolveAdmin, canAccessLab } from "./lib/auth.mjs";
-import { labStore } from "./lib/stores.mjs";
+import { labStore, cartHoldsStore } from "./lib/stores.mjs";
 import { resolveLab } from "./lib/lab-registry.mjs";
 import { updateJSON, ConcurrentWriteError } from "./lib/occ.mjs";
 import { sendEmail } from "./lib/email.mjs";
@@ -112,6 +112,13 @@ export default withErrorBoundary(async (req) => {
     if (!body.name || !body.email || !Array.isArray(body.items) || body.items.length === 0) {
       return json({ error: "name, email, and items required" }, 400);
     }
+    // The browser tab's own cart-hold session id (see cart-holds.mjs) - lets
+    // the availability check below tell "someone else already has this held"
+    // (a real conflict) apart from "I have this held, in my own cart, and
+    // I'm now checking out exactly that" (not a conflict at all). Optional:
+    // an older client or one that never built a cart-hold just gets no
+    // exclusion, same as before this feature existed.
+    const sessionId = typeof body.sessionId === "string" ? body.sessionId.trim() : "";
 
     // admins may backdate a checkout (e.g. supplies that were checked out before this
     // system existed); regular self-checkout always uses the current server time
@@ -177,7 +184,7 @@ export default withErrorBoundary(async (req) => {
         // matching the existing backdating privilege above.
         if (!isAdminForLab) {
           const inventory = (await store.get("inventory", { type: "json" })) || [];
-          const holds = await computePendingHolds(labId);
+          const holds = await computePendingHolds(labId, { excludeSessionId: sessionId || undefined });
           for (const reqItem of record.items) {
             const invItem = inventory.find((i) => i.id === reqItem.itemId);
             const available = invItem ? claimableQty(invItem, availableQty(invItem, checkouts), holds) : 0;
@@ -191,6 +198,20 @@ export default withErrorBoundary(async (req) => {
       })
     );
     if (errorResponse) return errorResponse;
+
+    // The cart these units came from just turned into a real checkout - its
+    // cart-hold reservation would otherwise keep counting against everyone
+    // else for up to TTL_MS longer even though the stock it was "holding" is
+    // now genuinely gone from checkedOutQty instead. Best-effort and
+    // non-blocking, same as every other housekeeping step here: the
+    // reservation still self-expires on its own even if this fails.
+    if (sessionId) {
+      try {
+        await updateJSON(cartHoldsStore(), "holds", async (current) => (current || []).filter((rec) => rec.sessionId !== sessionId));
+      } catch (e) {
+        console.error(`checkouts: failed to clear cart hold for session "${sessionId}" after checkout (non-fatal):`, e);
+      }
+    }
 
     // Only send the confirmation email once the checkout is durably
     // committed and validated - never before, so a rejected/oversold

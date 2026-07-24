@@ -1769,6 +1769,90 @@ async function apiWrite(path, method, body, admin=false){
   return res.json();
 }
 
+/* ---- cart holds: tell the server "I have this in my cart right now" so a
+   second shopper/DRI browsing at the same time sees reduced availability
+   before either of us actually checks out or submits a request, not after.
+   See cart-holds.mjs - short-TTL, self-expiring, replace-the-whole-snapshot
+   on every sync so removing an item from a cart needs no separate call. ---- */
+// One id per browser tab, not per device - sessionStorage (not localStorage)
+// so two tabs shopping at once never fight over the same reservation.
+function getCartSessionId(){
+  let id = sessionStorage.getItem('cartSessionId');
+  if(!id){
+    id = (crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`);
+    sessionStorage.setItem('cartSessionId', id);
+  }
+  return id;
+}
+// Fire-and-forget on purpose - a failed reservation sync never blocks
+// shopping or checkout, it just means the hold doesn't show up for other
+// users quite as fast (worst case, it lags behind by however long until the
+// next successful sync or the heartbeat tick below).
+async function syncCartHold(path, items){
+  try{
+    await apiWrite(path, 'POST', { sessionId: getCartSessionId(), items }, path.indexOf('lab=') === -1);
+  }catch(e){
+    console.error('syncCartHold: failed to sync cart reservation (non-fatal)', e);
+  }
+}
+const scheduleShopperCartHoldSync = debounce(()=>{
+  syncCartHold('/.netlify/functions/cart-holds?lab=' + encodeURIComponent(labUrlParam()), cart.map(c=>({itemId:c.itemId, qty:c.qty})));
+}, 400);
+const scheduleClientCartHoldSync = debounce(()=>{
+  syncCartHold('/.netlify/functions/cart-holds', clientCart.map(c=>({itemId:c.itemId, qty:c.qty})));
+}, 400);
+// Heartbeat: re-sends whichever cart is actually active every 90s so a
+// shopper who's slow to check out (reading a return-date field, typing an
+// email) doesn't lose their hold to the TTL mid-decision - the debounced
+// syncs above only fire on a mutation, this covers "sat there thinking."
+setInterval(()=>{
+  if(document.hidden) return;
+  if(cart.length && document.getElementById('main-view').style.display !== 'none'){
+    syncCartHold('/.netlify/functions/cart-holds?lab=' + encodeURIComponent(labUrlParam()), cart.map(c=>({itemId:c.itemId, qty:c.qty})));
+  }
+  if(typeof clientCart !== 'undefined' && clientCart.length && document.getElementById('client-view').style.display !== 'none'){
+    syncCartHold('/.netlify/functions/cart-holds', clientCart.map(c=>({itemId:c.itemId, qty:c.qty})));
+  }
+}, 90000);
+
+// True while the browser is actively typing/selecting something, so the
+// auto-refresh poll below can skip a tick rather than blow away an
+// in-progress qty entry or search keystroke out from under someone.
+function isEditingSomething(){
+  const el = document.activeElement;
+  if(!el) return false;
+  return el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT';
+}
+
+// Auto-refresh: the whole point of holds (pending requests, pending
+// transfers, other shoppers'/DRIs' own carts) is to stop two people from
+// both grabbing the same thing, but that only works if people actually SEE
+// the reduced number before they try. A shopper/DRI who loaded the page a
+// minute ago and never touched anything otherwise wouldn't see someone
+// else's hold land until their next manual action - this closes that gap by
+// silently re-fetching and re-rendering whichever browsing view is actually
+// on screen, every few seconds, without waiting on the user to do anything.
+// Paused while the tab itself is hidden (nothing to show anyone) and skips a
+// tick mid-edit (see isEditingSomething) rather than fighting the user for
+// their own input focus.
+setInterval(async ()=>{
+  if(document.hidden || isEditingSomething()) return;
+  try{
+    if(document.getElementById('main-view').style.display !== 'none' && currentLab.id){
+      await loadData();
+      renderGrid();
+    } else if(document.getElementById('client-view').style.display !== 'none'){
+      clientCatalog = await fetchClientCatalogSafe();
+      renderClientCatalog();
+    }
+  }catch(e){
+    // Silent - this is a background refresh, not a user-initiated action;
+    // the next tick just tries again, and any real problem already has its
+    // own visible failure path (loadData sets inventoryLoadFailed, etc).
+    console.error('auto-refresh: background poll failed (non-fatal, retrying next tick)', e);
+  }
+}, 8000);
+
 // Rebuilds the itemId -> outstanding-qty index from the current `checkouts`
 // array. Call this every time `checkouts` is reassigned. One pass over every
 // checkout (O(checkouts)) buys every subsequent checkedOutQty() call an O(1)
@@ -2150,6 +2234,11 @@ function buildCartLine(c, idx, indented){
 }
 
 function renderCart(){
+  // Every cart mutation routes through here (add, qty change, remove, clear
+  // after checkout) - one call site to keep the server's reservation in sync
+  // with what's actually on screen, instead of chasing every place `cart`
+  // gets touched.
+  scheduleShopperCartHoldSync();
   document.getElementById('cartCount').textContent = cart.reduce((s,c)=>s+c.qty,0);
   const wrap = document.getElementById('cartLines');
   if(cart.length===0){
@@ -2263,6 +2352,7 @@ document.getElementById('submitCheckout').onclick = async ()=>{
       returnDate: indefinite ? null : returnDate,
       items: cart,
       labName: currentLab.name,
+      sessionId: getCartSessionId(),
     });
     cart = [];
     await loadData();
@@ -2678,6 +2768,7 @@ function addToClientCart(item, qty){
     clientCart.push({itemId: item.id, name: item.name, attribute: item.attribute||'', serialNumber: item.serialNumber||'', available: item.available, qty: Math.min(item.available, qty)});
   }
   updateClientCartChipCount();
+  scheduleClientCartHoldSync();
 }
 
 function buildClientItemCard(item){
@@ -2764,6 +2855,7 @@ function renderClientCartLines(){
     row.querySelector('.rm').onclick = ()=>{
       clientCart.splice(idx, 1);
       updateClientCartChipCount();
+      scheduleClientCartHoldSync();
       renderClientCartLines();
     };
     wrap.appendChild(row);
@@ -2784,7 +2876,7 @@ document.getElementById('clientCartSubmitBtn').onclick = async ()=>{
   // message is easier to act on than an unordered batch of settled results.
   for(const line of clientCart){
     try{
-      clientRequests = await apiWrite('/.netlify/functions/source-requests', 'POST', {itemId: line.itemId, qty: line.qty, note}, true);
+      clientRequests = await apiWrite('/.netlify/functions/source-requests', 'POST', {itemId: line.itemId, qty: line.qty, note, sessionId: getCartSessionId()}, true);
       succeeded++;
     }catch(err){
       failed.push(line.name);
@@ -2792,6 +2884,11 @@ document.getElementById('clientCartSubmitBtn').onclick = async ()=>{
   }
   clientCart = clientCart.filter(line=> failed.includes(line.name));
   updateClientCartChipCount();
+  // Each successful line already cleared its own hold server-side (see
+  // source-requests.mjs), but re-sync here anyway so the remaining snapshot
+  // (just the failed lines, if any) is what the server actually has on
+  // record - the same debounced sync every other cart mutation goes through.
+  scheduleClientCartHoldSync();
   renderClientCartLines();
   document.getElementById('clientCartNote').value = '';
   btn.disabled = false;
