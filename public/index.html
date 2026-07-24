@@ -1015,7 +1015,7 @@
         </div>
 
         <div class="admin-section" data-admin-section="inventory">
-          <h2>Lab Inventory (<span id="invCount">0</span> items)<button class="btn btn-ghost" id="printAllLabelsBtn" type="button" style="margin-left:auto;">🖨 Print All Labels</button></h2>
+          <h2>Lab Inventory (<span id="invCount">0</span> items)<button class="btn btn-ghost" id="printSelectedLabelsBtn" type="button" style="margin-left:auto;display:none;">🖨 Print Selected (<span id="invSelectedCount">0</span>)</button><button class="btn btn-ghost" id="printAllLabelsBtn" type="button">🖨 Print All Labels</button></h2>
           <div style="display:flex; gap:8px; align-items:center; margin-bottom:12px;">
             <input type="text" id="invSearch" class="mono" placeholder="search items, categories, attributes, serial #…" style="flex:1;max-width:360px;">
             <button class="btn btn-ghost" id="invCollapseAllBtn" type="button">Collapse all</button>
@@ -1023,7 +1023,8 @@
           </div>
           <table id="invTable">
             <colgroup>
-              <col style="width:42%;">
+              <col style="width:4%;">
+              <col style="width:38%;">
               <col style="width:9%;">
               <col style="width:10%;">
               <col style="width:9%;">
@@ -1031,7 +1032,7 @@
               <col style="width:11%;">
               <col style="width:9%;">
             </colgroup>
-            <thead><tr><th>Name</th><th>Notes</th><th>Total Qty</th><th>Checked Out</th><th>Alert At</th><th>QR</th><th></th></tr></thead>
+            <thead><tr><th><input type="checkbox" id="invSelectAllCheck" title="Select every visible item"></th><th>Name</th><th>Notes</th><th>Total Qty</th><th>Checked Out</th><th>Alert At</th><th>QR</th><th></th></tr></thead>
             <tbody></tbody>
           </table>
         </div>
@@ -3567,14 +3568,19 @@ function printKitQR(kit){
   w.document.close();
 }
 
-document.getElementById('printAllLabelsBtn').onclick = printAllLabels;
+document.getElementById('printAllLabelsBtn').onclick = ()=> openLabelSheet(inventory, kits, 'Item QR Labels');
 
-function printAllLabels(){
-  if(inventory.length === 0 && kits.length === 0){ showToast('No items to print labels for'); return; }
+// Shared label-sheet renderer behind "Print All Labels," "Print Selected,"
+// and each category's own "Print category" shortcut - all three are really
+// the same output (a printable grid of QR labels), just fed a different
+// subset of `items`/`kits`. Kept as one function so the sheet's layout only
+// ever needs to be right in one place.
+function openLabelSheet(items, kits, title){
+  if(items.length === 0 && kits.length === 0){ showToast('No items to print labels for'); return; }
   const w = window.open('', '_blank', 'width=900,height=700');
   if(!w){ showToast('Allow pop-ups to print QR labels'); return; }
 
-  const itemCards = inventory.map(item=>{
+  const itemCards = items.map(item=>{
     const qrUrl = 'https://api.qrserver.com/v1/create-qr-code/?size=240x240&data=' +
       encodeURIComponent('LABITEM:' + item.id);
     return `
@@ -3604,7 +3610,7 @@ function printAllLabels(){
   const cards = itemCards + kitCards;
 
   w.document.write(`
-    <html><head><title>Item QR Labels</title>
+    <html><head><title>${escapeAttr(title)}</title>
     <style>
       body{ font-family: sans-serif; padding:20px; }
       .top-bar{ display:flex; justify-content:space-between; align-items:center; margin-bottom:18px; }
@@ -3618,7 +3624,7 @@ function printAllLabels(){
     </style>
     </head><body>
       <div class="top-bar">
-        <h2>QR Labels (${inventory.length + kits.length})</h2>
+        <h2>${escapeAttr(title)} (${items.length + kits.length})</h2>
         <button onclick="window.print()">Print all</button>
       </div>
       <div class="label-grid">${cards}</div>
@@ -4731,6 +4737,7 @@ function buildInvRow(item){
   const catCol = categoryColor(item.category);
   const tr = document.createElement('tr');
   tr.innerHTML = `
+    <td><input type="checkbox" class="invRowCheck" ${selectedInvItemIds.has(item.id) ? 'checked' : ''}></td>
     <td style="min-width:260px;">
       <input type="text" value="${escapeAttr(item.name)}" class="nameEdit mono" style="width:100%;min-width:200px;">
       ${item.onHold > 0 ? `<div style="margin-top:6px;"><span class="badge active" title="Claimed by a pending client source request or an outgoing transfer proposal - still fully in stock until that's actually accepted/fulfilled.">⏳ ${item.onHold} on hold</span></div>` : ''}
@@ -4898,6 +4905,11 @@ function buildInvRow(item){
       handleAdminApiError(err);
     }
   };
+  tr.querySelector('.invRowCheck').addEventListener('change', (e)=>{
+    if(e.target.checked) selectedInvItemIds.add(item.id);
+    else selectedInvItemIds.delete(item.id);
+    updatePrintSelectedButton();
+  });
   return tr;
 }
 
@@ -4907,24 +4919,50 @@ function buildInvRow(item){
 // explicit expand, matching how a real accordion behaves.
 let collapsedInvCats = new Set();
 let invSearchTerm = "";
+// Selected for bulk label printing - kept in a Set keyed by item id (not
+// DOM state) for the same reason collapsedInvCats is: it has to survive a
+// full tbody rebuild (a save, a poll refresh, a search) without losing what
+// was checked.
+let selectedInvItemIds = new Set();
+function updatePrintSelectedButton(){
+  const btn = document.getElementById('printSelectedLabelsBtn');
+  const count = selectedInvItemIds.size;
+  document.getElementById('invSelectedCount').textContent = count;
+  btn.style.display = count > 0 ? '' : 'none';
+}
 
 function renderInvTable(){
   document.getElementById('invCount').textContent = inventory.length;
   const tbody = document.querySelector('#invTable tbody');
   tbody.innerHTML = "";
 
+  // Drop anything that's no longer a real item (deleted since it was
+  // checked) so the "Print Selected" count/button never lingers on a
+  // selection that can't actually be printed anymore.
+  const liveIds = new Set(inventory.map(i=>i.id));
+  for(const id of [...selectedInvItemIds]){ if(!liveIds.has(id)) selectedInvItemIds.delete(id); }
+
   // See looseSearchMatch above - same multi-word/synonym/typo-tolerant
   // engine as every other item search box in the app.
   const visible = invSearchTerm ? inventory.filter(i=> looseSearchMatch(itemSearchText(i), invSearchTerm)) : inventory;
 
+  const selectAllCheck = document.getElementById('invSelectAllCheck');
   if(inventory.length===0){
-    tbody.innerHTML = '<tr><td colspan="7" class="empty">No items yet — add some above.</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="8" class="empty">No items yet — add some above.</td></tr>';
+    selectAllCheck.checked = false;
+    updatePrintSelectedButton();
     return;
   }
   if(visible.length===0){
-    tbody.innerHTML = '<tr><td colspan="7" class="empty">No items match that search.</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="8" class="empty">No items match that search.</td></tr>';
+    selectAllCheck.checked = false;
+    updatePrintSelectedButton();
     return;
   }
+  // Reflects whether every currently-visible (search-filtered) item is
+  // selected - independent of collapse state, since a collapsed category's
+  // items are still "in scope," just not drawn right now.
+  selectAllCheck.checked = visible.every(i=> selectedInvItemIds.has(i.id));
 
   const groups = {};
   visible.forEach(item=>{
@@ -4945,17 +4983,29 @@ function renderInvTable(){
     // the point of searching at all.
     const collapsed = !invSearchTerm && collapsedInvCats.has(cat);
     const groupRow = document.createElement('tr');
-    groupRow.innerHTML = `<td colspan="7" class="cat-group-row collapsible${collapsed?' collapsed':''}" style="border-left:5px solid ${col.solid};background:${col.tint};color:${col.solid};"><span class="cat-group-chevron">▾</span>${escapeAttr(cat)} <span class="mono cat-group-count">(${groups[cat].length})</span></td>`;
-    groupRow.querySelector('.cat-group-row').onclick = ()=>{
+    groupRow.innerHTML = `
+      <td colspan="8" class="cat-group-row collapsible${collapsed?' collapsed':''}" style="border-left:5px solid ${col.solid};background:${col.tint};color:${col.solid};">
+        <span class="cat-group-chevron">▾</span>${escapeAttr(cat)} <span class="mono cat-group-count">(${groups[cat].length})</span>
+        <button type="button" class="btn btn-ghost cat-print-btn" style="margin-left:auto;padding:3px 10px;font-size:11.5px;" title="Print labels for every item in ${escapeAttr(cat)}">🖨 Print category</button>
+      </td>`;
+    const headerCell = groupRow.querySelector('.cat-group-row');
+    headerCell.onclick = ()=>{
       if(collapsedInvCats.has(cat)) collapsedInvCats.delete(cat);
       else collapsedInvCats.add(cat);
       renderInvTable();
+    };
+    // Doesn't collapse/expand the group it sits inside of - stopPropagation
+    // keeps this click from also bubbling up to the header's own toggle.
+    groupRow.querySelector('.cat-print-btn').onclick = (e)=>{
+      e.stopPropagation();
+      openLabelSheet(groups[cat], [], `${cat} — QR Labels`);
     };
     tbody.appendChild(groupRow);
     if(!collapsed){
       groups[cat].forEach(item=> tbody.appendChild(buildInvRow(item)));
     }
   });
+  updatePrintSelectedButton();
 }
 document.getElementById('invSearch').addEventListener('input', debounce((e)=>{
   invSearchTerm = e.target.value.trim();
@@ -4968,6 +5018,17 @@ document.getElementById('invCollapseAllBtn').onclick = ()=>{
 document.getElementById('invExpandAllBtn').onclick = ()=>{
   collapsedInvCats = new Set();
   renderInvTable();
+};
+document.getElementById('invSelectAllCheck').addEventListener('change', (e)=>{
+  const visible = invSearchTerm ? inventory.filter(i=> looseSearchMatch(itemSearchText(i), invSearchTerm)) : inventory;
+  if(e.target.checked) visible.forEach(i=> selectedInvItemIds.add(i.id));
+  else visible.forEach(i=> selectedInvItemIds.delete(i.id));
+  renderInvTable();
+});
+document.getElementById('printSelectedLabelsBtn').onclick = ()=>{
+  const items = inventory.filter(i=> selectedInvItemIds.has(i.id));
+  if(items.length===0) return;
+  openLabelSheet(items, [], 'Selected QR Labels');
 };
 
 function statusOf(c){
