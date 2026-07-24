@@ -767,6 +767,7 @@
         <button class="admin-nav-btn" type="button" id="companyInvNavBtn" data-target="companyInventory" style="display:none;">Company Inventory</button>
 
         <div class="admin-nav-group-label">Transfers</div>
+        <button class="admin-nav-btn" type="button" data-target="sourceRequests">Source Requests<span id="sourceRequestActionCount" class="nav-count-badge" style="display:none;"></span></button>
         <button class="admin-nav-btn" type="button" data-target="transfers">Transfers<span id="transferActionCount" class="nav-count-badge" style="display:none;"></span></button>
 
         <div class="admin-sidebar-divider"></div>
@@ -896,6 +897,21 @@
             <thead><tr><th>Item</th><th>Qty</th><th>Checked out by</th><th>Kit</th><th>Reported</th><th></th></tr></thead>
             <tbody></tbody>
           </table>
+        </div>
+
+        <div class="admin-section" data-admin-section="sourceRequests">
+          <h2>Source Requests<button class="btn btn-ghost" id="sourceRequestsRefreshBtn" type="button" style="margin-left:auto;">↻ Refresh</button></h2>
+          <div class="small-note" style="margin-bottom:14px;">
+            What client DRIs have asked to source from any lab you manage. Fulfilling or declining a request here
+            never moves stock by itself - it's a claim for staff to act on, so once you fulfill one, go check the
+            item out for real through Assign Supplies.
+          </div>
+
+          <div class="chipbar" style="margin-bottom:12px;">
+            <div class="chip active" data-sourcereqfilter="action">Needs Your Action</div>
+            <div class="chip" data-sourcereqfilter="history">History</div>
+          </div>
+          <div id="sourceRequestsList"></div>
         </div>
 
         <div class="admin-section" data-admin-section="transfers">
@@ -1035,15 +1051,22 @@
   </header>
   <main>
     <div class="toolbar">
-      <input type="text" id="clientSearch" placeholder="search items…" class="mono">
+      <input type="text" id="clientSearch" placeholder="search items, categories…" class="mono">
     </div>
     <div class="chipbar" style="margin-bottom:18px;">
       <div class="chip active" data-clienttab="catalog">Browse Inventory</div>
+      <div class="chip" data-clienttab="cart">Cart<span id="clientCartChipCount" class="nav-count-badge" style="display:none;"></span></div>
       <div class="chip" data-clienttab="requests">My Requests</div>
     </div>
 
     <div id="clientCatalogSection">
       <div id="clientCatalogGrid" class="grid"><div class="loading">Loading inventory…</div></div>
+    </div>
+
+    <div id="clientCartSection" style="display:none;">
+      <div id="clientCartLines" style="margin-bottom:16px;"></div>
+      <div class="field"><label>Note (optional, applied to every item in this batch)</label><input type="text" id="clientCartNote" placeholder="What's this for?"></div>
+      <button class="btn btn-teal btn-full" id="clientCartSubmitBtn" type="button">Submit Requests</button>
     </div>
 
     <div id="clientRequestsSection" style="display:none;">
@@ -2375,10 +2398,13 @@ let transferDirection = 'send';
 let transferSendCart = [];   // {itemId, name, qty} - built from the CURRENT lab's own inventory (the "New Transfer" builder always proposes relative to currentLab)
 let transferReqCart = [];    // {name, qty} - free-text, since a request never sees the other lab's real inventory
 let transferFilter = 'action';
+let sourceRequests = [];     // every source request visible to this admin, across every lab they manage - see source-requests.mjs
+let sourceRequestFilter = 'action';
 let clientCatalog = [];      // sanitized, cross-lab items for a Client DRI - see sanitizeItemForRole() in inventory.mjs
 let clientRequests = [];     // this client org's own source-request history - see source-requests.mjs
 let clientSearchTerm = '';
 let clientTab = 'catalog';
+let clientCart = [];         // {itemId, name, available, qty} - built up across the catalog before one batch submit
 
 // Labs the CURRENT admin is allowed to see/manage - superadmins get
 // everything, lab-admins are restricted to their assigned labs.
@@ -2459,6 +2485,7 @@ async function enterAdminView(sectionToShow){
   // switch; renderTransfers() re-runs on switch via renderAdmin() below to
   // pick up currentLab's own inventory for the "New Transfer" builder.
   transfers = await fetchTransfersSafe();
+  sourceRequests = await fetchSourceRequestsSafe();
   labDirectory = await fetchLabDirectorySafe();
 
   updateTopActionsVisibility();
@@ -2516,6 +2543,20 @@ async function fetchClientRequestsSafe(){
   }
 }
 
+// Adding to cart merges by itemId (same pattern as the shopper's addToCart)
+// rather than letting the same item show up as two separate lines - qty is
+// summed and capped at what's actually available, since two adds of the
+// same item are really just "I want more of this", not two claims.
+function addToClientCart(item, qty){
+  const existing = clientCart.find(c=> c.itemId === item.id);
+  if(existing){
+    existing.qty = Math.min(item.available, existing.qty + qty);
+  } else {
+    clientCart.push({itemId: item.id, name: item.name, available: item.available, qty: Math.min(item.available, qty)});
+  }
+  updateClientCartChipCount();
+}
+
 function buildClientItemCard(item){
   const card = document.createElement('div');
   card.className = 'item-card' + (item.available===0 ? ' out':'');
@@ -2531,31 +2572,32 @@ function buildClientItemCard(item){
     </div>
     <div class="add-row">
       <input type="number" class="qty-input mono" min="1" max="${item.available}" value="${item.available>0?1:0}" ${item.available===0?'disabled':''}>
-      <button class="btn btn-teal" style="flex:1" ${item.available===0?'disabled':''}>Request</button>
+      <button class="btn btn-teal" style="flex:1" ${item.available===0?'disabled':''}>Add to Cart</button>
     </div>
   `;
   const qtyInput = card.querySelector('.qty-input');
   const btn = card.querySelector('button');
-  btn.onclick = async ()=>{
+  btn.onclick = ()=>{
     const q = Math.min(item.available, Math.max(1, parseInt(qtyInput.value)||1));
-    btn.disabled = true;
-    try{
-      clientRequests = await apiWrite('/.netlify/functions/source-requests', 'POST', {itemId: item.id, qty: q}, true);
-      showToast(`Requested ${q} × ${item.name}`);
-      renderClientRequests();
-    }catch(err){
-      handleAdminApiError(err, "Couldn't submit that request");
-    }finally{
-      btn.disabled = item.available===0;
-    }
+    addToClientCart(item, q);
+    showToast(`Added ${q} × ${item.name} to cart`);
   };
   return card;
 }
 
+// Not just item name - a shopper (or here, a DRI) browsing by "what do I
+// need" more often thinks in terms of category or a loose keyword than the
+// exact product name, so this matches across name/category/attribute
+// together rather than name alone.
 function renderClientCatalog(){
   const grid = document.getElementById('clientCatalogGrid');
   const term = clientSearchTerm.toLowerCase();
-  const items = clientCatalog.filter(i => i.name.toLowerCase().includes(term));
+  const items = clientCatalog.filter(i =>
+    !term ||
+    i.name.toLowerCase().includes(term) ||
+    (i.category||'').toLowerCase().includes(term) ||
+    (i.attribute||'').toLowerCase().includes(term)
+  );
   if(items.length === 0){
     grid.innerHTML = `<div class="empty">${clientCatalog.length===0 ? 'No inventory available yet.' : 'No items match that search.'}</div>`;
     return;
@@ -2566,6 +2608,74 @@ function renderClientCatalog(){
     .sort((a,b)=> a.name.localeCompare(b.name, undefined, {sensitivity:'base'}))
     .forEach(item=> grid.appendChild(buildClientItemCard(item)));
 }
+
+function updateClientCartChipCount(){
+  const badge = document.getElementById('clientCartChipCount');
+  if(clientCart.length > 0){
+    badge.textContent = String(clientCart.length);
+    badge.style.display = 'inline-flex';
+  } else {
+    badge.style.display = 'none';
+  }
+}
+
+function renderClientCartLines(){
+  const wrap = document.getElementById('clientCartLines');
+  const submitBtn = document.getElementById('clientCartSubmitBtn');
+  if(clientCart.length === 0){
+    wrap.innerHTML = '<div class="empty" style="padding:10px 0;">Your cart is empty — add items from Browse Inventory.</div>';
+    submitBtn.disabled = true;
+    return;
+  }
+  submitBtn.disabled = false;
+  wrap.innerHTML = '';
+  clientCart.forEach((line, idx)=>{
+    const row = document.createElement('div');
+    row.className = 'cart-line';
+    row.innerHTML = `<span class="cart-name">${escapeAttr(line.name)} <span class="mono" style="color:var(--ink-soft)">×${line.qty}</span></span><button class="rm">✕</button>`;
+    row.querySelector('.rm').onclick = ()=>{
+      clientCart.splice(idx, 1);
+      updateClientCartChipCount();
+      renderClientCartLines();
+    };
+    wrap.appendChild(row);
+  });
+}
+
+document.getElementById('clientCartSubmitBtn').onclick = async ()=>{
+  if(clientCart.length === 0) return;
+  const btn = document.getElementById('clientCartSubmitBtn');
+  const note = document.getElementById('clientCartNote').value.trim();
+  btn.disabled = true;
+  btn.textContent = 'Submitting…';
+  let succeeded = 0;
+  const failed = [];
+  // Sequential, not Promise.all - each POST is a small, independent write to
+  // a shared list (see source-requests.mjs's updateJSON), so there's no
+  // correctness reason to parallelize, and a clear one-at-a-time failure
+  // message is easier to act on than an unordered batch of settled results.
+  for(const line of clientCart){
+    try{
+      clientRequests = await apiWrite('/.netlify/functions/source-requests', 'POST', {itemId: line.itemId, qty: line.qty, note}, true);
+      succeeded++;
+    }catch(err){
+      failed.push(line.name);
+    }
+  }
+  clientCart = clientCart.filter(line=> failed.includes(line.name));
+  updateClientCartChipCount();
+  renderClientCartLines();
+  document.getElementById('clientCartNote').value = '';
+  btn.disabled = false;
+  btn.textContent = 'Submit Requests';
+  if(failed.length === 0){
+    showToast(`Requested ${succeeded} item${succeeded===1?'':'s'}`);
+    document.querySelector('#client-view [data-clienttab="requests"]').click();
+  } else {
+    showToast(`${succeeded} requested, ${failed.length} failed (${failed.join(', ')}) — still in your cart`);
+  }
+  renderClientRequests();
+};
 
 function clientRequestBadgeClass(status){
   if(status === 'fulfilled') return 'returned';
@@ -2601,9 +2711,12 @@ async function enterClientView(){
   clientTab = 'catalog';
   document.querySelectorAll('#client-view .chip').forEach(c=> c.classList.toggle('active', c.dataset.clienttab === 'catalog'));
   document.getElementById('clientCatalogSection').style.display = '';
+  document.getElementById('clientCartSection').style.display = 'none';
   document.getElementById('clientRequestsSection').style.display = 'none';
   document.getElementById('clientSearch').value = '';
   clientSearchTerm = '';
+  clientCart = [];
+  updateClientCartChipCount();
 
   [clientCatalog, clientRequests] = await Promise.all([fetchClientCatalogSafe(), fetchClientRequestsSafe()]);
   renderClientCatalog();
@@ -2616,7 +2729,9 @@ document.querySelectorAll('#client-view [data-clienttab]').forEach(chip=>{
     chip.classList.add('active');
     clientTab = chip.dataset.clienttab;
     document.getElementById('clientCatalogSection').style.display = clientTab === 'catalog' ? '' : 'none';
+    document.getElementById('clientCartSection').style.display = clientTab === 'cart' ? '' : 'none';
     document.getElementById('clientRequestsSection').style.display = clientTab === 'requests' ? '' : 'none';
+    if(clientTab === 'cart') renderClientCartLines();
   };
 });
 document.getElementById('clientSearch').addEventListener('input', debounce((e)=>{
@@ -3934,6 +4049,124 @@ function renderTransfers(){
   renderTransfersList();
 }
 
+/* ---------- ADMIN: source requests (client DRI claims against a lab) ---------- */
+async function fetchSourceRequestsSafe(){
+  try{ return await apiGet('/.netlify/functions/source-requests'); }catch(e){ return []; }
+}
+
+function sourceRequestBadgeClass(status){
+  if(status === 'fulfilled') return 'returned';
+  if(status === 'declined') return 'overdue';
+  return 'active';
+}
+
+function buildSourceRequestCard(r){
+  const card = document.createElement('div');
+  card.className = 'lab-row';
+  card.style.cssText = 'flex-direction:column; align-items:stretch; gap:8px;';
+
+  card.innerHTML = `
+    <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:10px;">
+      <span class="lab-row-name">
+        ${escapeAttr(r.itemName)} × ${r.qty}
+        <div class="small-note" style="margin-top:2px; font-weight:400;">
+          ${escapeAttr(r.labName)}${r.clientOrg ? ` · org ${escapeAttr(r.clientOrg)}` : ''}
+        </div>
+        ${r.note ? `<div class="small-note" style="margin-top:2px;">"${escapeAttr(r.note)}"</div>` : ''}
+        <div class="mono" style="font-size:11px; color:var(--ink-soft); margin-top:4px;">
+          Requested by ${escapeAttr(r.clientUsername)} · ${new Date(r.requestedAt).toLocaleString()}
+          ${r.resolvedBy ? `<br>${r.status.charAt(0).toUpperCase() + r.status.slice(1)} by ${escapeAttr(r.resolvedBy)} · ${new Date(r.resolvedAt).toLocaleString()}` : ''}
+        </div>
+      </span>
+      <span class="badge ${sourceRequestBadgeClass(r.status)}">${r.status}</span>
+    </div>
+    <div class="source-req-actions" style="display:flex; gap:8px;"></div>
+  `;
+
+  if(r.status === 'pending' && adminManagesLab(r.labId)){
+    const actionsWrap = card.querySelector('.source-req-actions');
+
+    const fulfillBtn = document.createElement('button');
+    fulfillBtn.className = 'btn btn-teal';
+    fulfillBtn.type = 'button';
+    fulfillBtn.textContent = 'Fulfill';
+    fulfillBtn.onclick = async ()=>{
+      const noteText = await showModal({title:'Fulfill request', msg:'Optional note (e.g. how/when it was handed off):', multiline:true, okText:'Mark Fulfilled'});
+      if(noteText === null) return;
+      try{
+        sourceRequests = await apiWrite('/.netlify/functions/source-requests', 'PATCH', {id:r.id, action:'fulfill', note:noteText}, true);
+        renderSourceRequestsList();
+        showToast(`Marked fulfilled — remember to check "${r.itemName}" out for real via Assign Supplies`);
+      }catch(err){
+        handleAdminApiError(err);
+      }
+    };
+
+    const declineBtn = document.createElement('button');
+    declineBtn.className = 'btn btn-ghost';
+    declineBtn.type = 'button';
+    declineBtn.textContent = 'Decline';
+    declineBtn.onclick = async ()=>{
+      const reason = await showModal({title:'Decline request', msg:'Decline this request? An optional reason helps the client understand why.', multiline:true, okText:'Decline Request'});
+      if(reason === null) return;
+      try{
+        sourceRequests = await apiWrite('/.netlify/functions/source-requests', 'PATCH', {id:r.id, action:'decline', note:reason}, true);
+        renderSourceRequestsList();
+        showToast('Request declined');
+      }catch(err){
+        handleAdminApiError(err);
+      }
+    };
+
+    actionsWrap.appendChild(fulfillBtn);
+    actionsWrap.appendChild(declineBtn);
+  }
+
+  return card;
+}
+
+function updateSourceRequestActionCount(){
+  const count = sourceRequests.filter(r=> r.status==='pending' && adminManagesLab(r.labId)).length;
+  const badge = document.getElementById('sourceRequestActionCount');
+  if(count > 0){
+    badge.textContent = String(count);
+    badge.style.display = 'inline-flex';
+  } else {
+    badge.style.display = 'none';
+  }
+}
+
+function renderSourceRequestsList(){
+  const wrap = document.getElementById('sourceRequestsList');
+  wrap.innerHTML = "";
+  let list;
+  if(sourceRequestFilter === 'action'){
+    list = sourceRequests.filter(r=> r.status==='pending' && adminManagesLab(r.labId));
+  } else {
+    list = sourceRequests.filter(r=> r.status!=='pending');
+  }
+  if(list.length===0){
+    wrap.innerHTML = `<div class="empty">${sourceRequestFilter==='action' ? 'Nothing needs your action right now.' : 'No resolved source requests yet.'}</div>`;
+  } else {
+    list.forEach(r=> wrap.appendChild(buildSourceRequestCard(r)));
+  }
+  updateSourceRequestActionCount();
+}
+
+document.querySelectorAll('[data-sourcereqfilter]').forEach(chip=>{
+  chip.onclick = ()=>{
+    document.querySelectorAll('[data-sourcereqfilter]').forEach(c=>c.classList.remove('active'));
+    chip.classList.add('active');
+    sourceRequestFilter = chip.dataset.sourcereqfilter;
+    renderSourceRequestsList();
+  };
+});
+document.getElementById('sourceRequestsRefreshBtn').onclick = async ()=>{
+  sourceRequests = await fetchSourceRequestsSafe();
+  renderSourceRequestsList();
+  showToast('Source requests refreshed');
+};
+
 let logFilter = 'all';
 let logSearchTerm = '';
 document.querySelectorAll('[data-logfilter]').forEach(chip=>{
@@ -3958,6 +4191,7 @@ function renderAdmin(){
   renderAssignKitSelect();
   renderKits();
   renderTransfers();
+  renderSourceRequestsList();
 }
 
 /* ---------- Notes: history list + pencil-edit + add box ---------- */

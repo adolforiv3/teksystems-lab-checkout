@@ -33,7 +33,15 @@ const rootToken = r.data.token;
 r = await call(labsMod, "POST", "/labs", { headers: { "x-admin-token": rootToken }, body: { name: "Lab Two" } });
 const labTwoId = r.data.created.id;
 
-r = await call(adminsMod, "POST", "/admins", { headers: { "x-admin-token": rootToken }, body: { username: "lab1admin", password: "lab1adminpw", role: "labadmin", labs: ["groomlake"] } });
+// lab1admin carries an email on file so the POST /source-requests branch
+// that emails lab admins about a new request (see notifyLabAdmins in
+// source-requests.mjs) actually has a real recipient to exercise, not just
+// an empty filter result. sendEmail() itself is a safe no-op without
+// SENDGRID_API_KEY/CHECKOUT_FROM_EMAIL set (see lib/email.mjs) - this only
+// asserts the request still succeeds with that code path exercised, not on
+// an email actually being sent (there is no provider configured here to
+// intercept).
+r = await call(adminsMod, "POST", "/admins", { headers: { "x-admin-token": rootToken }, body: { username: "lab1admin", password: "lab1adminpw", role: "labadmin", labs: ["groomlake"], email: "lab1admin@example.com" } });
 r = await call(adminAuthMod, "POST", "/admin-auth", { body: { action: "login", username: "lab1admin", password: "lab1adminpw" } });
 const lab1Token = r.data.token;
 
