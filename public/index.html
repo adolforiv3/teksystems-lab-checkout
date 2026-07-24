@@ -797,15 +797,18 @@
           <h2>Add Item</h2>
           <div class="admin-grid-form" style="grid-template-columns:2fr 1fr 1fr auto;">
             <input type="text" id="newName" placeholder="Item name" class="mono">
-            <input type="text" id="newCat" placeholder="Category" class="mono">
+            <select id="newCatSelect" class="mono"></select>
             <input type="number" id="newQty" placeholder="Qty" class="mono">
             <button class="btn btn-teal" id="addItemBtn">Add</button>
+          </div>
+          <div id="newCatCustomWrap" style="display:none; margin:-4px 0 10px;">
+            <input type="text" id="newCatCustom" placeholder="New category name" class="mono" style="width:100%; max-width:340px;">
           </div>
           <div style="display:flex; gap:10px; margin:-4px 0 14px; flex-wrap:wrap;">
             <input type="text" id="newAttribute" placeholder="Color / brand / SKU / etc. (optional)" class="mono" style="flex:1; min-width:220px;">
             <input type="text" id="newSerial" placeholder="Serial number / device ID (optional)" class="mono" style="flex:1; min-width:220px;">
           </div>
-          <div class="small-note">Category is a free-text label (e.g. "Multimeters", "Cabling", "Consumables") used for the filter chips. Attribute is an optional free-text descriptor — color, brand, SKU, whatever's useful for telling similar items apart. Serial number is optional too, for individually-tracked devices rather than bulk consumables.</div>
+          <div class="small-note">Category picks from what's already in this lab so you're not retyping the same label every time - pick "+ Add new category…" the first time you need one that doesn't exist yet. Attribute is an optional free-text descriptor — color, brand, SKU, whatever's useful for telling similar items apart. Serial number is optional too, for individually-tracked devices rather than bulk consumables.</div>
         </div>
 
         <div class="admin-section" data-admin-section="adminAccounts" id="adminAccountsSection">
@@ -3404,20 +3407,55 @@ function printAllLabels(){
   w.document.close();
 }
 
+// Add Item's category picker draws from whatever categories already exist
+// in this lab's inventory, instead of a free-text box someone has to
+// retype (and risk a stray typo splitting one category into two) every
+// single time. "+ Add new category…" is always the last option, for the
+// first item in a category that doesn't exist yet.
+const NEW_CATEGORY_VALUE = '__new__';
+function populateNewCatSelect(){
+  const sel = document.getElementById('newCatSelect');
+  const prev = sel.value;
+  const categories = [...new Set(inventory.map(i=> (i.category||'').trim()).filter(Boolean))]
+    .sort((a,b)=> a.localeCompare(b, undefined, {sensitivity:'base'}));
+  sel.innerHTML =
+    '<option value="">No category</option>' +
+    categories.map(c=> `<option value="${escapeAttr(c)}">${escapeAttr(c)}</option>`).join('') +
+    `<option value="${NEW_CATEGORY_VALUE}">+ Add new category…</option>`;
+  // Keep whatever was selected if it's still a valid option (e.g. right
+  // after adding an item, so a batch of same-category adds doesn't need
+  // re-picking every time) - fall back to "No category" otherwise, never
+  // silently landing on "+ Add new category" with an empty custom field.
+  sel.value = [...sel.options].some(o=> o.value === prev) ? prev : '';
+  document.getElementById('newCatCustomWrap').style.display = sel.value === NEW_CATEGORY_VALUE ? 'block' : 'none';
+}
+document.getElementById('newCatSelect').addEventListener('change', ()=>{
+  const sel = document.getElementById('newCatSelect');
+  const isNew = sel.value === NEW_CATEGORY_VALUE;
+  document.getElementById('newCatCustomWrap').style.display = isNew ? 'block' : 'none';
+  if(isNew) document.getElementById('newCatCustom').focus();
+});
+
 document.getElementById('addItemBtn').onclick = async ()=>{
   const name = document.getElementById('newName').value.trim();
-  const cat = document.getElementById('newCat').value.trim();
+  const catSelect = document.getElementById('newCatSelect');
+  const usingNewCat = catSelect.value === NEW_CATEGORY_VALUE;
+  const cat = usingNewCat ? document.getElementById('newCatCustom').value.trim() : catSelect.value;
   const qty = parseInt(document.getElementById('newQty').value) || 0;
   const attribute = document.getElementById('newAttribute').value.trim();
   const serialNumber = document.getElementById('newSerial').value.trim();
   if(!name || qty<=0){ showToast('Enter a name and a positive quantity'); return; }
+  if(usingNewCat && !cat){ showToast('Enter a name for the new category'); return; }
   try{
     inventory = await apiWrite(invUrl(), 'POST', {name, category:cat, qty, attribute, serialNumber}, true);
     document.getElementById('newName').value='';
-    document.getElementById('newCat').value='';
     document.getElementById('newQty').value='';
     document.getElementById('newAttribute').value='';
     document.getElementById('newSerial').value='';
+    document.getElementById('newCatCustom').value='';
+    populateNewCatSelect();
+    catSelect.value = [...catSelect.options].some(o=> o.value === cat) ? cat : '';
+    document.getElementById('newCatCustomWrap').style.display = 'none';
     renderAdmin();
     showToast('Item added');
   }catch(e){
@@ -4298,6 +4336,7 @@ function renderAdmin(){
   renderKits();
   renderTransfers();
   renderSourceRequestsList();
+  populateNewCatSelect();
 }
 
 /* ---------- Notes: history list + pencil-edit + add box ---------- */
