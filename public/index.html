@@ -1551,6 +1551,86 @@ function categoryColor(cat){
   return CATEGORY_PALETTE[h % CATEGORY_PALETTE.length];
 }
 
+/* ---- loose item search ----
+   A shopper (or DRI, or admin) searching almost never thinks in exact
+   field values or single keywords - "laptop hp" (two separate ideas: what
+   it is, then the brand), "cups" instead of a category actually labeled
+   "Mugs", a typo'd word - none of that matched when search was just "does
+   this one string appear as a substring of this one field". This is a
+   small, self-contained matching engine used by every item search box in
+   the app (shopper grid, admin Lab Inventory, Company Inventory, Client
+   Portal catalog) so "loose search" means the same thing everywhere
+   instead of three or four separately-drifting implementations.
+
+   Matching rules, applied to the lowercased, space-joined text of an
+   item's name/category/attribute:
+     1. The query is split into words - EVERY word has to match something
+        (AND, not OR), so "laptop hp" narrows down to HP laptops instead of
+        widening out to anything laptop-ish OR anything named hp.
+     2. Each query word is expanded through a small synonym table first
+        (SEARCH_SYNONYMS below) - "cups" also tries "mug"/"mugs", etc.
+     3. A word (or one of its synonyms) matches if it's a substring of the
+        item's text, OR - if no substring hit - if it's a near-miss typo
+        (edit distance 1 for short words, 2 for longer ones) of some whole
+        word in that text. That's what lets "laptob" still find laptops. */
+const SEARCH_SYNONYMS = {
+  cup:['cups','mug','mugs'], cups:['cup','mug','mugs'],
+  mug:['cup','cups','mugs'], mugs:['cup','cups','mug'],
+  computer:['computers','laptop','laptops','notebook','pc'], computers:['computer','laptop','laptops','notebook','pc'],
+  laptop:['laptops','computer','computers','notebook','pc'], laptops:['laptop','computer','computers','notebook','pc'],
+  notebook:['notebooks','laptop','laptops','computer'], notebooks:['notebook','laptop','laptops','computer'],
+  pc:['computer','computers','laptop','laptops'],
+  phone:['phones','mobile','cell','smartphone'], phones:['phone','mobile','cell','smartphone'],
+  mobile:['phone','phones','cell','smartphone'], smartphone:['phone','phones','mobile'],
+  headset:['headphones','headsets','earphones'], headphones:['headset','headsets','earphones'],
+  earphones:['headphones','headset','earbuds'], earbuds:['earphones','headphones'],
+  monitor:['monitors','screen','display'], screen:['monitor','display'], display:['monitor','screen'],
+  charger:['chargers','adapter','cable','power'], adapter:['charger','adapters','cable'],
+  cable:['cables','cord','wire','charger'], cord:['cable','wire'], wire:['cable','cord'],
+  battery:['batteries','power'], batteries:['battery'],
+  bag:['bags','case','pouch','sleeve'], case:['bag','bags','cover','sleeve'], sleeve:['case','bag'],
+  keyboard:['keyboards','kb'], mouse:['mice','trackpad'],
+  book:['books','novel','textbook'], books:['book','novels'],
+  tool:['tools','equipment'], tools:['tool','equipment'],
+};
+function expandSearchWord(word){
+  return [word, ...(SEARCH_SYNONYMS[word] || [])];
+}
+// Classic Levenshtein edit distance. These are short strings (single
+// words), so the O(n*m) table is trivial - the length-gap bailout just
+// avoids building a table for a pair that obviously can't be a near-miss.
+function editDistance(a, b){
+  if(Math.abs(a.length - b.length) > 3) return 99;
+  const dp = [];
+  for(let i=0;i<=a.length;i++) dp.push([i, ...Array(b.length).fill(0)]);
+  for(let j=0;j<=b.length;j++) dp[0][j] = j;
+  for(let i=1;i<=a.length;i++){
+    for(let j=1;j<=b.length;j++){
+      dp[i][j] = a[i-1]===b[j-1]
+        ? dp[i-1][j-1]
+        : 1 + Math.min(dp[i-1][j-1], dp[i-1][j], dp[i][j-1]);
+    }
+  }
+  return dp[a.length][b.length];
+}
+function wordCloseEnough(word, textWord){
+  const maxDist = word.length <= 4 ? 1 : 2;
+  return editDistance(word, textWord) <= maxDist;
+}
+function looseSearchMatch(text, query){
+  const q = (query || '').trim().toLowerCase();
+  if(!q) return true;
+  const textWords = text.split(/\s+/).filter(Boolean);
+  const queryWords = q.split(/\s+/).filter(Boolean);
+  return queryWords.every(qWord=>{
+    const candidates = expandSearchWord(qWord);
+    return candidates.some(c=> text.includes(c) || textWords.some(tw=> wordCloseEnough(c, tw)));
+  });
+}
+function itemSearchText(item){
+  return [item.name, item.category, item.attribute].filter(Boolean).join(' ').toLowerCase();
+}
+
 function showToast(msg){
   const t = document.getElementById('toast');
   t.textContent = msg; t.classList.add('show');
@@ -1838,16 +1918,11 @@ function renderGrid(){
     };
     return;
   }
-  // Not just item name - a shopper more often thinks in terms of category
-  // or a loose keyword than the exact product name, so this matches across
-  // name/category/attribute together rather than name alone.
+  // See looseSearchMatch above - multi-word AND, synonyms, and typo
+  // tolerance across name/category/attribute together.
   let items = inventory.filter(i=>{
     const matchCat = activeCategory==="all" || i.category===activeCategory;
-    const term = searchTerm.toLowerCase();
-    const matchSearch = !term ||
-      i.name.toLowerCase().includes(term) ||
-      (i.category||'').toLowerCase().includes(term) ||
-      (i.attribute||'').toLowerCase().includes(term);
+    const matchSearch = looseSearchMatch(itemSearchText(i), searchTerm);
     return matchCat && matchSearch;
   });
   if(items.length===0){
@@ -2620,13 +2695,9 @@ function buildClientItemCard(item){
 // together rather than name alone.
 function renderClientCatalog(){
   const grid = document.getElementById('clientCatalogGrid');
-  const term = clientSearchTerm.toLowerCase();
-  const items = clientCatalog.filter(i =>
-    !term ||
-    i.name.toLowerCase().includes(term) ||
-    (i.category||'').toLowerCase().includes(term) ||
-    (i.attribute||'').toLowerCase().includes(term)
-  );
+  // See looseSearchMatch above - same multi-word/synonym/typo-tolerant
+  // engine as the shopper grid.
+  const items = clientCatalog.filter(i => looseSearchMatch(itemSearchText(i), clientSearchTerm));
   if(items.length === 0){
     grid.innerHTML = `<div class="empty">${clientCatalog.length===0 ? 'No inventory available yet.' : 'No items match that search.'}</div>`;
     return;
@@ -3011,13 +3082,11 @@ function renderCompanyInventory(){
   const tbody = document.querySelector('#companyInvTable tbody');
   tbody.innerHTML = '';
 
-  const q = (document.getElementById('companyInvSearch').value || '').trim().toLowerCase();
-  const rows = q
-    ? companyInventory.filter(r =>
-        (r.name||'').toLowerCase().includes(q) ||
-        (r.category||'').toLowerCase().includes(q) ||
-        (r.labName||'').toLowerCase().includes(q))
-    : companyInventory;
+  // See looseSearchMatch above - same multi-word/synonym/typo-tolerant
+  // engine as every other item search box, plus the lab name since this
+  // view spans every lab.
+  const q = document.getElementById('companyInvSearch').value || '';
+  const rows = companyInventory.filter(r => looseSearchMatch(itemSearchText(r) + ' ' + (r.labName||'').toLowerCase(), q));
 
   document.getElementById('companyInvCount').textContent = rows.length;
   document.getElementById('companyInvLabCount').textContent = new Set(rows.map(r=>r.labId)).size;
