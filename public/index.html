@@ -639,7 +639,7 @@
 
   <main>
     <div class="toolbar">
-      <input type="text" id="search" placeholder="search items…" class="mono">
+      <input type="text" id="search" placeholder="search items, categories…" class="mono">
       <button class="btn btn-teal" id="scanBtn" type="button">📷 Scan</button>
       <button class="btn btn-ghost" id="returnItemsBtn" type="button">↩ Return Items</button>
     </div>
@@ -1822,9 +1822,16 @@ function renderGrid(){
     };
     return;
   }
+  // Not just item name - a shopper more often thinks in terms of category
+  // or a loose keyword than the exact product name, so this matches across
+  // name/category/attribute together rather than name alone.
   let items = inventory.filter(i=>{
     const matchCat = activeCategory==="all" || i.category===activeCategory;
-    const matchSearch = i.name.toLowerCase().includes(searchTerm.toLowerCase());
+    const term = searchTerm.toLowerCase();
+    const matchSearch = !term ||
+      i.name.toLowerCase().includes(term) ||
+      (i.category||'').toLowerCase().includes(term) ||
+      (i.attribute||'').toLowerCase().includes(term);
     return matchCat && matchSearch;
   });
   if(items.length===0){
