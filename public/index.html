@@ -369,22 +369,24 @@
     border-bottom:1px solid var(--border); padding:12px 12px; border-radius:var(--r-sm);
   }
   .cat-group-count{ font-weight:400; color:var(--ink-soft); text-transform:none; letter-spacing:0; }
-  .cat-row{ display:flex; align-items:center; gap:6px; margin-top:2px; }
   .cat-dot{ width:8px; height:8px; border-radius:50%; flex-shrink:0; display:inline-block; }
-  .cat-label{ font-size:12px; color:var(--ink-soft); }
-  .cat-edit-btn{ background:none; border:none; cursor:pointer; font-size:12px; color:var(--ink-soft); padding:0; line-height:1; flex-shrink:0; }
-  .cat-edit-btn:hover{ color:var(--teal); }
-  .cat-row .catEdit{ font-size:16px; padding:4px 8px; flex:1; min-width:0; }
-  .serial-row{ display:flex; align-items:center; gap:6px; margin-top:2px; }
-  .serial-label{ font-size:12px; color:var(--ink-soft); }
-  .serial-edit-btn{ background:none; border:none; cursor:pointer; font-size:12px; color:var(--ink-soft); padding:0; line-height:1; flex-shrink:0; }
-  .serial-edit-btn:hover{ color:var(--teal); }
-  .serial-row .serialEdit{ font-size:16px; padding:4px 8px; flex:1; min-width:0; }
-  .attribute-row{ display:flex; align-items:center; gap:6px; margin-top:2px; }
-  .attribute-label{ font-size:12px; color:var(--ink-soft); }
-  .attribute-edit-btn{ background:none; border:none; cursor:pointer; font-size:12px; color:var(--ink-soft); padding:0; line-height:1; flex-shrink:0; }
-  .attribute-edit-btn:hover{ color:var(--teal); }
-  .attribute-row .attributeEdit{ font-size:16px; padding:4px 8px; flex:1; min-width:0; }
+  .cat-label{ font-size:12.5px; color:var(--ink-soft); }
+  .serial-label, .attribute-label{ font-size:12.5px; color:var(--ink-soft); }
+  /* The item-name input sits flush above this block, so a visible top
+     border (rather than just a margin) is what actually reads as "this is
+     a separate group of secondary details," not a continuation of the name
+     field. Each row gets a fixed-width uppercase micro-label on the left so
+     the eye can scan straight down one column ("Category / Attribute /
+     Serial #") instead of parsing three differently-shaped inline strings
+     stacked 2px apart - which is what made this block read as smashed
+     together before. */
+  .item-meta{ margin-top:10px; padding-top:10px; border-top:1px solid var(--paper-line); display:flex; flex-direction:column; gap:8px; }
+  .meta-row{ display:flex; align-items:center; gap:8px; }
+  .meta-label{ font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.05em; color:var(--ink-soft); opacity:.6; width:56px; flex-shrink:0; }
+  .meta-row .cat-label, .meta-row .attribute-label, .meta-row .serial-label{ flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .meta-edit-btn{ background:none; border:none; cursor:pointer; font-size:12px; color:var(--ink-soft); padding:0; line-height:1; flex-shrink:0; }
+  .meta-edit-btn:hover{ color:var(--teal); }
+  .meta-row .catEdit, .meta-row .attributeEdit, .meta-row .serialEdit{ font-size:14px; padding:4px 8px; flex:1; min-width:0; }
   .edit-items-row td, .history-row td, .person-detail-marker td, .txn-row td, .person-history-row td{ background:var(--paper); border-bottom:1px solid var(--border); }
   .edit-items-panel{ padding:8px 2px; }
   .history-trail{ display:flex; flex-direction:column; gap:2px; }
@@ -4130,23 +4132,28 @@ function buildInvRow(item){
   const catCol = categoryColor(item.category);
   const tr = document.createElement('tr');
   tr.innerHTML = `
-    <td style="min-width:220px;">
-      <input type="text" value="${escapeAttr(item.name)}" class="nameEdit mono" style="width:100%;min-width:200px;margin-bottom:4px;">
-      <div class="attribute-row">
-        <span class="attribute-label mono">${item.attribute ? escapeAttr(item.attribute) : 'no attribute'}</span>
-        <button class="attribute-edit-btn" type="button" title="Edit attribute (color, brand, SKU, etc.)">✎</button>
-        <input type="text" value="${escapeAttr(item.attribute||'')}" class="attributeEdit mono" placeholder="color / brand / SKU" style="display:none;">
-      </div>
-      <div class="serial-row">
-        <span class="serial-label mono">${item.serialNumber ? escapeAttr(item.serialNumber) : 'no serial number'}</span>
-        <button class="serial-edit-btn" type="button" title="Edit serial number">✎</button>
-        <input type="text" value="${escapeAttr(item.serialNumber||'')}" class="serialEdit mono" placeholder="serial number" style="display:none;">
-      </div>
-      <div class="cat-row">
-        <span class="cat-dot" style="background:${catCol.solid}"></span>
-        <span class="cat-label mono" style="color:${catCol.solid}">${item.category ? escapeAttr(item.category) : 'no category'}</span>
-        <button class="cat-edit-btn" type="button" title="Edit category">✎</button>
-        <input type="text" value="${escapeAttr(item.category||'')}" class="catEdit mono" placeholder="category" style="display:none;">
+    <td style="min-width:260px;">
+      <input type="text" value="${escapeAttr(item.name)}" class="nameEdit mono" style="width:100%;min-width:200px;">
+      <div class="item-meta">
+        <div class="meta-row">
+          <span class="meta-label">Category</span>
+          <span class="cat-dot" style="background:${catCol.solid}"></span>
+          <span class="cat-label mono" style="color:${catCol.solid}">${item.category ? escapeAttr(item.category) : '—'}</span>
+          <button class="meta-edit-btn cat-edit-btn" type="button" title="Edit category">✎</button>
+          <input type="text" value="${escapeAttr(item.category||'')}" class="catEdit mono" placeholder="category" style="display:none;">
+        </div>
+        <div class="meta-row">
+          <span class="meta-label">Attribute</span>
+          <span class="attribute-label mono">${item.attribute ? escapeAttr(item.attribute) : '—'}</span>
+          <button class="meta-edit-btn attribute-edit-btn" type="button" title="Edit attribute (color, brand, SKU, etc.)">✎</button>
+          <input type="text" value="${escapeAttr(item.attribute||'')}" class="attributeEdit mono" placeholder="color / brand / SKU" style="display:none;">
+        </div>
+        <div class="meta-row">
+          <span class="meta-label">Serial #</span>
+          <span class="serial-label mono">${item.serialNumber ? escapeAttr(item.serialNumber) : '—'}</span>
+          <button class="meta-edit-btn serial-edit-btn" type="button" title="Edit serial number">✎</button>
+          <input type="text" value="${escapeAttr(item.serialNumber||'')}" class="serialEdit mono" placeholder="serial number" style="display:none;">
+        </div>
       </div>
     </td>
     <td>
