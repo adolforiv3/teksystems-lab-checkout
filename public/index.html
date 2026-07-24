@@ -1857,7 +1857,7 @@ setInterval(async ()=>{
   if(document.hidden || isEditingSomething() || isAnyOverlayOpen()) return;
   try{
     if(document.getElementById('main-view').style.display !== 'none' && currentLab.id){
-      await loadData();
+      await loadData({ skipKits: true });
       renderGrid();
     } else if(document.getElementById('client-view').style.display !== 'none'){
       clientCatalog = await fetchClientCatalogSafe();
@@ -1867,9 +1867,11 @@ setInterval(async ()=>{
       // Lab Inventory (with its onHold badges), Checkout Log, Missing
       // Items, Kits, Transfers, and Source Requests all read from the same
       // handful of underlying lists, so there's no cheaper way to keep all
-      // of them current than refreshing that bundle together.
+      // of them current than refreshing that bundle together. Kits skip the
+      // network round trip here specifically (see loadData) - whatever's
+      // already loaded stays visible, a real kit edit re-fetches on its own.
       const [, freshTransfers, freshRequests] = await Promise.all([
-        loadData(),
+        loadData({ skipKits: true }),
         fetchTransfersSafe(),
         fetchSourceRequestsSafe(),
       ]);
@@ -1916,11 +1918,22 @@ function reindexCheckouts(){
 let inventoryLoadFailed = false;
 let checkoutsLoadFailed = false;
 
-async function loadData(){
-  // Fetch inventory, checkouts, and kits in parallel instead of one after
-  // the other - same three round trips, half the wall-clock wait before the
-  // page has anything to render.
-  const [invResult, coResult, kitResult] = await Promise.allSettled([apiGet(invUrl()), apiGet(checkoutsUrl()), apiGet(kitsUrl())]);
+// `skipKits` is for the auto-refresh poll (see isEditingSomething's
+// setInterval below): kits are an admin-curated shortcut that changes rarely
+// (someone deliberately editing a kit), unlike inventory/checkouts which
+// change from other people's actions constantly - re-fetching them every 8s
+// forever, on every open tab, for data that's essentially always still what
+// it was is pure waste. A real page load or a cart/kit-touching action still
+// always fetches everything.
+async function loadData({ skipKits = false } = {}){
+  // Fetch inventory, checkouts, and (unless skipped) kits in parallel
+  // instead of one after the other - same round trips, half the wall-clock
+  // wait before the page has anything to render.
+  const [invResult, coResult, kitResult] = await Promise.allSettled([
+    apiGet(invUrl()),
+    apiGet(checkoutsUrl()),
+    skipKits ? Promise.resolve(kits) : apiGet(kitsUrl()),
+  ]);
 
   if(invResult.status === 'fulfilled'){
     inventory = invResult.value;
@@ -1944,7 +1957,9 @@ async function loadData(){
 
   // Kits are a convenience shortcut on top of inventory, not core data - a
   // failure here shouldn't block or alarm anyone, just fall back to
-  // whatever was already loaded (or an empty list) and log it.
+  // whatever was already loaded (or an empty list) and log it. When
+  // skipped, kitResult just resolves back to the current `kits` value
+  // above, so this branch is a no-op assignment rather than special-cased.
   if(kitResult.status === 'fulfilled'){
     kits = kitResult.value;
   } else {
@@ -2720,7 +2735,6 @@ async function enterAdminView(sectionToShow, preferredLabId){
     // Same admin-only bookmark pattern as switchAdminToLab - keeps the
     // address bar in sync so copying it or reloading lands back here too.
     history.replaceState(null, '', location.pathname + '?lab=' + encodeURIComponent(target.id));
-    await loadData();
   }
   document.getElementById('adminBrandTitle').textContent = (currentLab.name || 'Lab') + ' — Lab Inventory & Checkout Log';
 
@@ -2731,26 +2745,40 @@ async function enterAdminView(sectionToShow, preferredLabId){
   // one of its buttons is showing - a lab-admin should never see a bold
   // section header sitting above nothing.
   document.getElementById('orgNavGroupLabel').style.display = isSuper ? '' : 'none';
+
+  // Every one of these is an independent read (this lab's own inventory
+  // bundle, plus every company-wide list an admin's own panel needs) -
+  // firing them all at once instead of one after another is the difference
+  // between waiting on a chain of round trips and waiting on just the
+  // slowest one, which is most of what made opening the admin panel feel
+  // slow.
+  const [, fetchedAdmins, fetchedCompanyInv, fetchedTransfers, fetchedRequests, fetchedDirectory] = await Promise.all([
+    target ? loadData() : Promise.resolve(),
+    isSuper ? fetchAdminsSafe() : Promise.resolve(allAdmins),
+    isSuper ? fetchCompanyInventorySafe() : Promise.resolve(companyInventory),
+    fetchTransfersSafe(),
+    fetchSourceRequestsSafe(),
+    fetchLabDirectorySafe(),
+  ]);
   if(isSuper){
-    allAdmins = await fetchAdminsSafe();
+    allAdmins = fetchedAdmins;
     cancelEditAdmin();
     renderAdminAccounts();
-    companyInventory = await fetchCompanyInventorySafe();
+    companyInventory = fetchedCompanyInv;
     renderCompanyInventory();
   }
+  // Transfers/source requests are for any lab admin, not just superadmins -
+  // fetched once per admin-view entry (both are global/company-wide, not
+  // tied to whichever lab happens to be currentLab) rather than on every
+  // lab switch; renderTransfers() re-runs on switch via renderAdmin() below
+  // to pick up currentLab's own inventory for the "New Transfer" builder.
+  transfers = fetchedTransfers;
+  sourceRequests = fetchedRequests;
+  labDirectory = fetchedDirectory;
 
   const roleLabel = isSuper ? 'Superadmin' : 'Lab Admin';
   document.getElementById('adminUserInfo').innerHTML =
     `Signed in as<br><b>${escapeAttr(adminUser.username)}</b> · ${roleLabel}`;
-
-  // Transfers are for any lab admin, not just superadmins - fetched once
-  // per admin-view entry (both are global/company-wide, not tied to
-  // whichever lab happens to be currentLab) rather than on every lab
-  // switch; renderTransfers() re-runs on switch via renderAdmin() below to
-  // pick up currentLab's own inventory for the "New Transfer" builder.
-  transfers = await fetchTransfersSafe();
-  sourceRequests = await fetchSourceRequestsSafe();
-  labDirectory = await fetchLabDirectorySafe();
 
   updateTopActionsVisibility();
   renderAdminLabList();
