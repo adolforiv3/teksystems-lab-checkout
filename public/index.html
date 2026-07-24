@@ -1834,20 +1834,27 @@ function isEditingSomething(){
   if(!el) return false;
   return el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT';
 }
+// True while any modal/overlay (confirm dialog, notes editor, password
+// change, return-date picker, login) is up - a background re-render is the
+// last thing that should happen out from under an open dialog.
+function isAnyOverlayOpen(){
+  return !!document.querySelector('#modal-overlay.open, #login-overlay.open, #pw-overlay.open, #return-overlay.open, #notes-overlay.open');
+}
 
 // Auto-refresh: the whole point of holds (pending requests, pending
 // transfers, other shoppers'/DRIs' own carts) is to stop two people from
 // both grabbing the same thing, but that only works if people actually SEE
-// the reduced number before they try. A shopper/DRI who loaded the page a
-// minute ago and never touched anything otherwise wouldn't see someone
-// else's hold land until their next manual action - this closes that gap by
-// silently re-fetching and re-rendering whichever browsing view is actually
-// on screen, every few seconds, without waiting on the user to do anything.
-// Paused while the tab itself is hidden (nothing to show anyone) and skips a
-// tick mid-edit (see isEditingSomething) rather than fighting the user for
-// their own input focus.
+// the reduced number before they try. Nobody involved - shopper, DRI, or
+// staff looking at Lab/Company Inventory - should have to manually reload
+// to find out something changed elsewhere. This silently re-fetches and
+// re-renders whichever view is actually on screen, every few seconds,
+// without waiting on the user to do anything. Paused while the tab itself
+// is hidden (nothing to show anyone), skips a tick mid-edit (see
+// isEditingSomething) rather than fighting the user for their own input
+// focus, and skips a tick while any modal/overlay is open (see
+// isAnyOverlayOpen) so an in-progress dialog is never disturbed.
 setInterval(async ()=>{
-  if(document.hidden || isEditingSomething()) return;
+  if(document.hidden || isEditingSomething() || isAnyOverlayOpen()) return;
   try{
     if(document.getElementById('main-view').style.display !== 'none' && currentLab.id){
       await loadData();
@@ -1855,6 +1862,24 @@ setInterval(async ()=>{
     } else if(document.getElementById('client-view').style.display !== 'none'){
       clientCatalog = await fetchClientCatalogSafe();
       renderClientCatalog();
+    } else if(document.getElementById('admin-view').style.display !== 'none' && currentLab.id){
+      // Same bundle switchAdminToLab already refreshes on every lab switch -
+      // Lab Inventory (with its onHold badges), Checkout Log, Missing
+      // Items, Kits, Transfers, and Source Requests all read from the same
+      // handful of underlying lists, so there's no cheaper way to keep all
+      // of them current than refreshing that bundle together.
+      const [, freshTransfers, freshRequests] = await Promise.all([
+        loadData(),
+        fetchTransfersSafe(),
+        fetchSourceRequestsSafe(),
+      ]);
+      transfers = freshTransfers;
+      sourceRequests = freshRequests;
+      renderAdmin();
+      if(adminUser && adminUser.role === 'superadmin' && document.querySelector('.admin-section.active')?.dataset.adminSection === 'companyInventory'){
+        companyInventory = await fetchCompanyInventorySafe();
+        renderCompanyInventory();
+      }
     }
   }catch(e){
     // Silent - this is a background refresh, not a user-initiated action;
@@ -2658,7 +2683,7 @@ function updateTopActionsVisibility(){
   document.getElementById('switchLabBtn').style.display = adminUnlocked ? '' : 'none';
 }
 
-async function enterAdminView(sectionToShow){
+async function enterAdminView(sectionToShow, preferredLabId){
   const ok = await ensureAdminUnlocked();
   if(!ok) return;
   // A Client DRI never sees the lab-scoped admin panel at all - it's built
@@ -2675,11 +2700,26 @@ async function enterAdminView(sectionToShow){
   allLabs = await fetchLabsSafe();
 
   const myLabs = visibleLabsForAdmin();
-  if(!currentLab.id && myLabs.length){
-    // admin arrived with no lab chosen yet (e.g. straight from the "no lab
-    // selected" screen) - default into the first lab they're allowed to
-    // manage, carrying its access token along so the shopper view works too.
-    currentLab = { id: myLabs[0].id, name: myLabs[0].name, accessToken: myLabs[0].accessToken, locked: myLabs[0].locked };
+  // Restore whichever lab this admin was actually looking at, in priority
+  // order: an explicit id passed in (an admin `?lab=<id>` deep link, see
+  // init()), whatever's already in memory (switching sections mid-session
+  // never re-picks), the last lab remembered from a previous visit (see
+  // switchAdminToLab - survives a plain page refresh or a brand-new tab),
+  // then just the first lab they can see. Reloading used to always reset
+  // back to lab #1 (or bounce out to sign-in entirely) - this is what makes
+  // a refresh behave like reloading any other normal page instead.
+  const savedLabId = localStorage.getItem('lastAdminLabId');
+  const target =
+    myLabs.find(l=> l.id === preferredLabId) ||
+    myLabs.find(l=> l.id === currentLab.id) ||
+    myLabs.find(l=> l.id === savedLabId) ||
+    myLabs[0];
+  if(target){
+    currentLab = { id: target.id, name: target.name, accessToken: target.accessToken, locked: target.locked };
+    localStorage.setItem('lastAdminLabId', target.id);
+    // Same admin-only bookmark pattern as switchAdminToLab - keeps the
+    // address bar in sync so copying it or reloading lands back here too.
+    history.replaceState(null, '', location.pathname + '?lab=' + encodeURIComponent(target.id));
     await loadData();
   }
   document.getElementById('adminBrandTitle').textContent = (currentLab.name || 'Lab') + ' — Lab Inventory & Checkout Log';
@@ -3154,6 +3194,10 @@ document.getElementById('adminAddLabBtn').onclick = async ()=>{
 
 async function switchAdminToLab(lab){
   currentLab = { id: lab.id, name: lab.name, accessToken: lab.accessToken, locked: lab.locked };
+  // Remembered across refreshes/tabs so init() can restore this exact lab
+  // instead of resetting to whichever lab happens to be first - see
+  // enterAdminView().
+  localStorage.setItem('lastAdminLabId', lab.id);
   // The URL still carries the raw id here rather than the token - this is
   // an admin-only bookmark/deep-link, and resolveLab's id-fallback only
   // ever honors it for an admin already scoped to that lab (see
@@ -5749,6 +5793,57 @@ async function enterLab(lab, token){
     await showSetNewPasswordModal(resetToken);
     showNoLabSelected();
     return;
+  }
+
+  // Resume a signed-in admin/DRI session before anything else. This matters
+  // for two different reload cases: a plain refresh while in the admin
+  // panel (no `?lab=` in the URL at all, used to just dead-end at "no lab
+  // selected"), AND a refresh right after switching labs as an admin
+  // (switchAdminToLab puts the lab's raw internal id on `?lab=` as an
+  // admin-only bookmark - resolveLabFromToken() below has no way to send an
+  // admin token with it, so that id would otherwise fail anonymous
+  // resolution and land on "invalid link" instead of just... being an
+  // admin). Doing this check first means either case lands back exactly
+  // where the admin left off, the same way reloading any other logged-in
+  // site does.
+  const savedAdminToken = localStorage.getItem('adminToken');
+  if(savedAdminToken){
+    const who = await whoami(savedAdminToken);
+    if(who){
+      adminToken = savedAdminToken;
+      adminUser = who;
+      adminUnlocked = true;
+      if(who.role === 'client'){
+        // A DRI has no lab-scoped shopper view to fall through to at all -
+        // always resume the client portal regardless of labParam.
+        await enterClientView();
+        return;
+      }
+      if(!labParam){
+        await enterAdminView();
+        return;
+      }
+      // A labParam is present - only treat this as "resume the admin
+      // panel" when it's actually one of THIS admin's own labs (their own
+      // switch-lab bookmark, a raw internal id - see switchAdminToLab).
+      // A genuine shopper share-link token never matches a raw lab id, so
+      // this falls through to the normal anonymous resolution below - an
+      // admin opening a colleague's real share link still sees exactly
+      // what a shopper would, rather than always getting yanked into their
+      // own admin panel. The session stays resumed in memory either way,
+      // so the Admin toggle in the top bar is already live if they want it.
+      allLabs = await fetchLabsSafe();
+      if(visibleLabsForAdmin().some(l=> l.id === labParam)){
+        await enterAdminView(undefined, labParam);
+        return;
+      }
+    } else {
+      // Saved token no longer validates (expired, revoked, password
+      // changed elsewhere) - drop it and fall through to the normal
+      // anonymous/shopper resolution below rather than silently retrying
+      // forever.
+      localStorage.removeItem('adminToken');
+    }
   }
 
   if(labParam){
