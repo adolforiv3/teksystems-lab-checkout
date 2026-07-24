@@ -4513,6 +4513,7 @@ function buildInvRow(item){
   tr.innerHTML = `
     <td style="min-width:260px;">
       <input type="text" value="${escapeAttr(item.name)}" class="nameEdit mono" style="width:100%;min-width:200px;">
+      ${item.onHold > 0 ? `<div style="margin-top:6px;"><span class="badge active" title="Claimed by a pending client source request or an outgoing transfer proposal - still fully in stock until that's actually accepted/fulfilled.">⏳ ${item.onHold} on hold</span></div>` : ''}
       <div class="item-meta">
         <div class="meta-row">
           <span class="meta-label">Category</span>

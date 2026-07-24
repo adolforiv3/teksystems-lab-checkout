@@ -1,5 +1,5 @@
 import { resolveAdmin, canAccessLab, isSuperadmin, isClient } from "./lib/auth.mjs";
-import { labStore, labRegistryStore } from "./lib/stores.mjs";
+import { labStore, labRegistryStore, sourceRequestsStore, transfersStore } from "./lib/stores.mjs";
 import { resolveLab, loadLabsForRead, labsVisibleTo } from "./lib/lab-registry.mjs";
 import { updateJSON, ConcurrentWriteError } from "./lib/occ.mjs";
 import { checkLowStockAndNotify, availableQty } from "./lib/lowstock.mjs";
@@ -16,6 +16,42 @@ function sortInventory(inventory) {
   return [...inventory].sort((a, b) =>
     (a.name || "").localeCompare(b.name || "", undefined, { sensitivity: "base" })
   );
+}
+
+// How much of each item is currently spoken for but hasn't actually left
+// the shelf yet - a pending client source request, or a pending outgoing
+// "send" transfer proposal this lab made that the destination hasn't
+// accepted yet. Neither one touches qty (see source-requests.mjs and
+// transfers.mjs - both are deliberately "nothing moves until someone
+// actually accepts/fulfills it"), so real stock is still fully available
+// to a shopper checking out right now; this is purely an informational
+// heads-up for staff deciding what to do with what's left. A pending
+// "request" transfer never counts here even when this lab is the source -
+// it's just a named wishlist until *this* lab picks real items to fulfill
+// it with, so there's no specific item to attribute the hold to yet.
+async function computePendingHolds(labId) {
+  const holds = new Map(); // itemId -> qty on hold
+  try {
+    const [requests, transfers] = await Promise.all([
+      sourceRequestsStore().get("requests", { type: "json" }),
+      transfersStore().get("transfers", { type: "json" }),
+    ]);
+    for (const r of requests || []) {
+      if (r.status === "pending" && r.labId === labId) {
+        holds.set(r.itemId, (holds.get(r.itemId) || 0) + r.qty);
+      }
+    }
+    for (const t of transfers || []) {
+      if (t.status === "pending" && t.direction === "send" && t.sourceLabId === labId) {
+        for (const it of t.items) {
+          holds.set(it.itemId, (holds.get(it.itemId) || 0) + it.qty);
+        }
+      }
+    }
+  } catch (e) {
+    console.error(`inventory: computePendingHolds failed for lab "${labId}" (non-fatal, holds just won't show):`, e);
+  }
+  return holds;
 }
 
 // The single place role-based field-stripping happens for item data,
@@ -226,7 +262,13 @@ export default withErrorBoundary(async (req) => {
 
   if (method === "GET") {
     const inventory = (await store.get("inventory", { type: "json" })) || [];
-    return json(sortInventory(inventory));
+    const sorted = sortInventory(inventory);
+    // Hold counts are a staff concern (they name a client org/other lab
+    // that a shopper has no business seeing) - only attached for a caller
+    // actually scoped to this lab, never for an anonymous shopper.
+    if (!canAccessLab(admin, labId)) return json(sorted);
+    const holds = await computePendingHolds(labId);
+    return json(sorted.map((i) => ({ ...i, onHold: holds.get(i.id) || 0 })));
   }
 
   // every write below requires the requester to be an admin scoped to this lab.
