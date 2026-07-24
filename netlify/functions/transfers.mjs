@@ -3,7 +3,7 @@ import { labStore, transfersStore, labRegistryStore } from "./lib/stores.mjs";
 import { loadLabsForRead } from "./lib/lab-registry.mjs";
 import { updateJSON, ConcurrentWriteError } from "./lib/occ.mjs";
 import { availableQty, checkLowStockAndNotify } from "./lib/lowstock.mjs";
-import { computePendingHolds } from "./lib/holds.mjs";
+import { computePendingHolds, computePendingRequestHolds } from "./lib/holds.mjs";
 import { sendEmail } from "./lib/email.mjs";
 import { json, withErrorBoundary } from "./lib/http.mjs";
 
@@ -103,35 +103,24 @@ export default withErrorBoundary(async (req) => {
 
       const note = typeof body.note === "string" ? body.note.trim() : "";
       const actor = admin.username || admin.id;
-      let items;
+      let rawSendItems; // shape-validated only - real availability is re-checked fresh inside the mutator below
+      let requestItems; // "request" direction never touches real stock, so this is the finalized shape already
 
       if (direction === "send") {
         if (!Array.isArray(body.items) || body.items.length === 0) {
           return json({ error: "at least one item is required" }, 400);
         }
-        const sourceStore = labStore(sourceLabId);
-        const inventory = (await sourceStore.get("inventory", { type: "json" })) || [];
-        const checkouts = (await sourceStore.get("checkouts", { type: "json" })) || [];
-        // Excludes anything already claimed by a pending client source
-        // request or another pending send proposal from this same lab, so
-        // this lab can't propose sending units it's already promised
-        // somewhere else.
-        const holds = await computePendingHolds(sourceLabId);
         const seen = new Set();
-        items = [];
+        rawSendItems = [];
         for (const raw of body.items) {
           const qty = raw && raw.qty;
           if (typeof raw.itemId !== "string" || !raw.itemId) return json({ error: "each item needs an itemId" }, 400);
           if (!(typeof qty === "number" && qty > 0)) return json({ error: "each item needs a positive qty" }, 400);
-          const invItem = inventory.find((i) => i.id === raw.itemId);
-          if (!invItem) return json({ error: "item not found" }, 404);
-          const avail = Math.max(0, availableQty(invItem, checkouts) - (holds.get(invItem.id) || 0));
-          if (qty > avail) return json({ error: `not enough "${invItem.name}" available (${avail} left)` }, 409);
           if (seen.has(raw.itemId)) continue;
           seen.add(raw.itemId);
-          items.push({ itemId: invItem.id, name: invItem.name, category: invItem.category || "", qty });
+          rawSendItems.push({ itemId: raw.itemId, qty });
         }
-        if (items.length === 0) return json({ error: "at least one item is required" }, 400);
+        if (rawSendItems.length === 0) return json({ error: "at least one item is required" }, 400);
       } else {
         // A "request" never references real items - the requester can't see
         // the source lab's inventory at all (see labDirectory). Just a
@@ -139,41 +128,88 @@ export default withErrorBoundary(async (req) => {
         if (!Array.isArray(body.items) || body.items.length === 0) {
           return json({ error: "at least one item is required" }, 400);
         }
-        items = body.items.map((raw) => ({
+        requestItems = body.items.map((raw) => ({
           name: typeof raw.name === "string" ? raw.name.trim() : "",
           qty: typeof raw.qty === "number" && raw.qty > 0 ? raw.qty : null,
         }));
-        if (items.some((it) => !it.name || !it.qty)) {
+        if (requestItems.some((it) => !it.name || !it.qty)) {
           return json({ error: "each requested item needs a name and a positive qty" }, 400);
         }
       }
 
       const nowIso = new Date().toISOString();
-      const record = {
-        id: crypto.randomUUID(),
-        sourceLabId,
-        sourceLabName: sourceLab.name,
-        destinationLabId,
-        destinationLabName: destinationLab.name,
-        direction,
-        items,
-        status: "pending",
-        note,
-        requestedBy: actor,
-        requestedAt: nowIso,
-        history: [{ at: nowIso, action: direction === "send" ? "sent" : "requested", by: actor, note }],
-      };
+      // Set inside the mutator on whichever attempt actually wins, so the
+      // notification/response below reflects exactly what got written.
+      let writtenRecord = null;
 
-      const list = await updateJSON(store, "transfers", async (current) => [...(current || []), record]);
+      const list = await updateJSON(store, "transfers", async (current) => {
+        const arr = current || [];
+        let items;
 
-      const approver = labById(approverLabId(record));
+        if (direction === "send") {
+          // Re-validated fresh on every attempt - including a retry
+          // triggered by a *different* concurrent "send" proposal from
+          // this same lab landing first - so two proposals can't both pass
+          // against the same stale inventory/holds snapshot and together
+          // promise more than the lab actually has. Other pending sends
+          // from this lab come straight from `arr`, the exact array this
+          // attempt is about to write, so a proposal that won a previous
+          // retry is always reflected here; source-request holds are a
+          // separate store, read fresh alongside it.
+          const sourceStore = labStore(sourceLabId);
+          const [inventory, checkouts, requestHolds] = await Promise.all([
+            sourceStore.get("inventory", { type: "json" }),
+            sourceStore.get("checkouts", { type: "json" }),
+            computePendingRequestHolds(sourceLabId),
+          ]);
+          const otherSendHolds = new Map();
+          for (const t of arr) {
+            if (t.status === "pending" && t.direction === "send" && t.sourceLabId === sourceLabId) {
+              for (const it of t.items) {
+                otherSendHolds.set(it.itemId, (otherSendHolds.get(it.itemId) || 0) + it.qty);
+              }
+            }
+          }
+          items = [];
+          for (const raw of rawSendItems) {
+            const invItem = (inventory || []).find((i) => i.id === raw.itemId);
+            if (!invItem) throw new ApiError("item not found", 404);
+            const totalHold = (otherSendHolds.get(raw.itemId) || 0) + (requestHolds.get(raw.itemId) || 0);
+            const avail = Math.max(0, availableQty(invItem, checkouts || []) - totalHold);
+            if (raw.qty > avail) {
+              throw new ApiError(`not enough "${invItem.name}" available (${avail} left)`, 409);
+            }
+            items.push({ itemId: invItem.id, name: invItem.name, category: invItem.category || "", qty: raw.qty });
+          }
+        } else {
+          items = requestItems;
+        }
+
+        writtenRecord = {
+          id: crypto.randomUUID(),
+          sourceLabId,
+          sourceLabName: sourceLab.name,
+          destinationLabId,
+          destinationLabName: destinationLab.name,
+          direction,
+          items,
+          status: "pending",
+          note,
+          requestedBy: actor,
+          requestedAt: nowIso,
+          history: [{ at: nowIso, action: direction === "send" ? "sent" : "requested", by: actor, note }],
+        };
+        return [...arr, writtenRecord];
+      });
+
+      const approver = labById(approverLabId(writtenRecord));
       const approverAction = direction === "send" ? "receive" : "fulfill";
       await notifyLab(
         approver.id,
         approver.name,
         `Transfer ${direction === "send" ? "incoming" : "request"} — ${sourceLab.name} ↔ ${destinationLab.name}`,
         `${sourceLab.name} and ${destinationLab.name} have a pending transfer that needs your team to ${approverAction} it.\n\n` +
-          items.map((it) => `  • ${it.name} × ${it.qty}`).join("\n") +
+          writtenRecord.items.map((it) => `  • ${it.name} × ${it.qty}`).join("\n") +
           (note ? `\n\nNote: ${note}` : "") +
           `\n\nReview it from the Transfers section in the admin panel.`
       );
