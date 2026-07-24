@@ -194,7 +194,15 @@ export default withErrorBoundary(async (req) => {
     ).flat();
     rows.sort((a, b) => {
       const labCmp = (a.labName || "").localeCompare(b.labName || "", undefined, { sensitivity: "base" });
-      return labCmp || (a.name || "").localeCompare(b.name || "", undefined, { sensitivity: "base" });
+      if (labCmp) return labCmp;
+      // Uncategorized sorts last within a lab, same convention as the
+      // shopper grid's category grouping (renderGrid), rather than sorting
+      // an empty string first and scattering uncategorized items to the top.
+      const aCat = (a.category || "").trim();
+      const bCat = (b.category || "").trim();
+      const catCmp = !aCat && !bCat ? 0 : !aCat ? 1 : !bCat ? -1 : aCat.localeCompare(bCat, undefined, { sensitivity: "base" });
+      if (catCmp) return catCmp;
+      return (a.name || "").localeCompare(b.name || "", undefined, { sensitivity: "base" });
     });
     return json(rows);
   }
