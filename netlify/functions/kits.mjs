@@ -1,4 +1,4 @@
-import { resolveAdmin, canAccessLab, hasClearance } from "./lib/auth.mjs";
+import { resolveAdmin, canAccessLab } from "./lib/auth.mjs";
 import { labStore } from "./lib/stores.mjs";
 import { resolveLab } from "./lib/lab-registry.mjs";
 import { updateJSON, ConcurrentWriteError } from "./lib/occ.mjs";
@@ -23,30 +23,6 @@ function sortKits(kits) {
   return [...kits].sort((a, b) => (a.name || "").localeCompare(b.name || "", undefined, { sensitivity: "base" }));
 }
 
-// Same need-to-know model as inventory.mjs's visibleTo/filterVisible: an
-// admin who isn't cleared for a classified item's tier doesn't get to learn
-// it exists just because it's referenced inside a kit. Each kit's item list
-// is filtered down to only itemIds the caller is cleared to see; a kit left
-// with zero visible items is dropped from the response entirely (mirrors
-// checkouts.mjs's "record with no visible items disappears" rule) so its
-// mere existence doesn't leak that there's a kit built entirely around
-// something they're not cleared for. Anonymous/shopper callers see every
-// item reference unfiltered - classified items are already checkout-visible
-// to shoppers (see inventory.mjs's sanitizeForCheckout), so there's nothing
-// to filter for them here either.
-function filterVisibleKits(kits, admin, labId, classById) {
-  if (!admin) return kits;
-  return kits
-    .map((kit) => ({
-      ...kit,
-      items: kit.items.filter((it) => {
-        const tier = classById.get(it.itemId) || "standard";
-        return tier === "standard" || hasClearance(admin, labId, tier);
-      }),
-    }))
-    .filter((kit) => kit.items.length > 0);
-}
-
 function visitorAccessOk(req, lab, admin, labId) {
   if (!lab || !lab.entryPasscode) return true; // no lab passcode set - open access
   if (canAccessLab(admin, labId)) return true; // an admin scoped to this lab always gets in
@@ -54,14 +30,9 @@ function visitorAccessOk(req, lab, admin, labId) {
 }
 
 // Defense in depth against a crafted request bypassing the admin UI's own
-// item picker (which can only ever offer itemIds the admin's own GET
-// /inventory already returned, i.e. already clearance-filtered): reject any
-// itemId in the submitted list that either doesn't exist in this lab's
-// inventory, or exists but at a classification tier this admin isn't
-// cleared for. Same "item not found" phrasing as inventory.mjs's own writes
-// - never confirms a classified item's existence to an uncleared caller via
-// the error message alone.
-function validateKitItems(items, inventory, admin, labId) {
+// item picker: reject any itemId in the submitted list that doesn't exist
+// in this lab's inventory.
+function validateKitItems(items, inventory) {
   if (!Array.isArray(items) || items.length === 0) {
     throw new ApiError("at least one item is required", 400);
   }
@@ -74,10 +45,6 @@ function validateKitItems(items, inventory, admin, labId) {
     if (!(typeof qty === "number" && qty > 0)) throw new ApiError("each item needs a positive qty", 400);
     const invItem = inventory.find((i) => i.id === itemId);
     if (!invItem) throw new ApiError("item not found", 404);
-    const tier = invItem.classification || "standard";
-    if (tier !== "standard" && !hasClearance(admin, labId, tier)) {
-      throw new ApiError("item not found", 404);
-    }
     if (!seen.has(itemId)) {
       seen.add(itemId);
       cleaned.push({ itemId, qty });
@@ -106,10 +73,7 @@ export default withErrorBoundary(async (req) => {
 
   if (method === "GET") {
     const kits = (await store.get("kits", { type: "json" })) || [];
-    if (!admin) return json(sortKits(kits));
-    const inventory = (await store.get("inventory", { type: "json" })) || [];
-    const classById = new Map(inventory.map((i) => [i.id, i.classification || "standard"]));
-    return json(sortKits(filterVisibleKits(kits, admin, labId, classById)));
+    return json(sortKits(kits));
   }
 
   // every write below requires the requester to be an admin scoped to this lab.
@@ -125,7 +89,7 @@ export default withErrorBoundary(async (req) => {
       if (!name) return json({ error: "kit name required" }, 400);
 
       const inventory = (await store.get("inventory", { type: "json" })) || [];
-      const items = validateKitItems(body.items, inventory, admin, labId);
+      const items = validateKitItems(body.items, inventory);
 
       const newKit = { id: crypto.randomUUID(), name, items, createdAt: new Date().toISOString() };
       const kits = await updateJSON(store, "kits", async (current) => [...(current || []), newKit]);
@@ -148,9 +112,9 @@ export default withErrorBoundary(async (req) => {
         if (body.items !== undefined) {
           // Re-read inventory + re-validate fresh on every retry attempt, same
           // reasoning as every other OCC mutator in this app - an item could
-          // be deleted or reclassified out from under a slow-to-land edit.
+          // be deleted out from under a slow-to-land edit.
           const inventory = (await store.get("inventory", { type: "json" })) || [];
-          updated.items = validateKitItems(body.items, inventory, admin, labId);
+          updated.items = validateKitItems(body.items, inventory);
         }
 
         const next = [...list];

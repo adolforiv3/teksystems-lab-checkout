@@ -1,10 +1,9 @@
 // Coverage for kits: a lab admin builds a named {itemId,qty} recipe that
 // the checkout screen can quick-add in one click. Kits are deliberately
 // NOT a new inventory concept - this suite mostly checks that kits.mjs
-// resolves/validates references into the real inventory correctly, applies
-// the same classification/clearance need-to-know model as inventory.mjs
-// and checkouts.mjs, and that access control matches every other lab-scoped
-// endpoint (anon can read, only a scoped admin can write).
+// resolves/validates references into the real inventory correctly, and
+// that access control matches every other lab-scoped endpoint (anon can
+// read, only a scoped admin can write).
 process.env.ADMIN_PASSCODE = "masterpass123";
 
 const base = "http://local";
@@ -59,7 +58,7 @@ assert(r.status === 201, "root creates a kit spanning two items");
 let kit = r.data.find((k) => k.name === "Field Repair Kit");
 assert(!!kit, "the created kit comes back in the list");
 assert(kit.items.length === 2, "both item references are present");
-assert(!("name" in kit.items[0]) && !("classification" in kit.items[0]), "a kit item reference is just {itemId, qty} - no captured/duplicated item metadata");
+assert(!("name" in kit.items[0]) && !("category" in kit.items[0]), "a kit item reference is just {itemId, qty} - no captured/duplicated item metadata");
 const kitId = kit.id;
 
 r = await call(kitsMod, "GET", "/kits?lab=groomlake", { headers: { "x-admin-token": rootToken } });
@@ -93,50 +92,6 @@ assert(r.status === 401, "an unscoped admin can't even resolve the lab by its ra
 // is the path that actually reaches the write-gate's 403.
 r = await call(kitsMod, "POST", `/kits?${anonLabQuery}`, { headers: { "x-admin-token": unscopedToken }, body: { name: "Unscoped Kit", items: [{ itemId: multimeter.id, qty: 1 }] } });
 assert(r.status === 403, "an admin who resolves the lab via its share link, but isn't scoped to it, gets 403 on write - not a silent success");
-
-// --- classification: a kit's item list respects clearance the same way inventory/checkouts do ---
-r = await call(inventoryMod, "POST", "/inventory?lab=groomlake", { headers: { "x-admin-token": rootToken }, body: { name: "Secret Sensor", qty: 5, classification: "black" } });
-assert(r.status === 403, "root has no clearance yet, so root can't create a black item");
-
-const rootAdmins = await call(adminsMod, "GET", "/admins", { headers: { "x-admin-token": rootToken } });
-const rootId = rootAdmins.data.find((a) => a.username === "root").id;
-await call(adminsMod, "PATCH", "/admins", { headers: { "x-admin-token": rootToken }, body: { id: rootId, grantClearance: { labId: "groomlake", tier: "black" } } });
-
-r = await call(inventoryMod, "POST", "/inventory?lab=groomlake", { headers: { "x-admin-token": rootToken }, body: { name: "Secret Sensor", qty: 5, classification: "black" } });
-assert(r.status === 200, "now cleared, root creates the black item");
-const secretSensor = r.data.find((i) => i.name === "Secret Sensor");
-
-r = await call(kitsMod, "POST", "/kits?lab=groomlake", {
-  headers: { "x-admin-token": rootToken },
-  body: { name: "Classified Kit", items: [{ itemId: secretSensor.id, qty: 1 }, { itemId: cableTester.id, qty: 1 }] },
-});
-assert(r.status === 201, "cleared root builds a kit mixing a classified item with a standard one");
-const classifiedKitId = r.data.find((k) => k.name === "Classified Kit").id;
-
-// give the other admin access to groomlake now, without clearance, to test the kit-filtering path
-await call(adminsMod, "PATCH", "/admins", { headers: { "x-admin-token": rootToken }, body: { id: rootAdmins.data.find((a) => a.username === "otherlabtech").id, labs: ["groomlake"] } });
-
-r = await call(kitsMod, "GET", "/kits?lab=groomlake", { headers: { "x-admin-token": unscopedToken } });
-const mixedKitAsUncleared = r.data.find((k) => k.id === classifiedKitId);
-assert(!!mixedKitAsUncleared, "an uncleared admin still sees the mixed kit - it has a standard item too");
-assert(mixedKitAsUncleared.items.length === 1 && mixedKitAsUncleared.items[0].itemId === cableTester.id, "but the classified item's reference is filtered out of that kit's item list");
-
-r = await call(kitsMod, "POST", "/kits?lab=groomlake", {
-  headers: { "x-admin-token": rootToken },
-  body: { name: "All Classified Kit", items: [{ itemId: secretSensor.id, qty: 1 }] },
-});
-const allClassifiedKitId = r.data.find((k) => k.name === "All Classified Kit").id;
-r = await call(kitsMod, "GET", "/kits?lab=groomlake", { headers: { "x-admin-token": unscopedToken } });
-assert(!r.data.some((k) => k.id === allClassifiedKitId), "a kit built entirely from a classified item disappears completely for an uncleared admin - its existence doesn't leak either");
-
-r = await call(kitsMod, "POST", "/kits?lab=groomlake", {
-  headers: { "x-admin-token": unscopedToken },
-  body: { name: "Sneaky Kit", items: [{ itemId: secretSensor.id, qty: 1 }] },
-});
-assert(r.status === 404, "an uncleared admin can't even reference the classified item by id when building a new kit - defense in depth against a crafted request");
-
-r = await call(kitsMod, "GET", `/kits?${anonLabQuery}`, {});
-assert(r.data.some((k) => k.id === allClassifiedKitId) && r.data.find((k) => k.id === allClassifiedKitId).items.length === 1, "an anonymous shopper sees the classified item's reference unfiltered - matches inventory.mjs's existing checkout-visible-to-shoppers rule for classified items");
 
 // --- delete ---
 r = await call(kitsMod, "DELETE", "/kits?lab=groomlake", { headers: { "x-admin-token": rootToken }, body: { id: kitId } });

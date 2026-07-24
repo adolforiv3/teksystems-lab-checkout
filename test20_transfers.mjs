@@ -163,34 +163,23 @@ r = await call(inventoryMod, "GET", "/inventory?lab=" + labTwoId, { headers: { "
 const labTwoMultimeters = r.data.filter((i) => i.name === "Multimeter");
 assert(labTwoMultimeters.length === 1 && labTwoMultimeters[0].qty === 8, "Lab Two's existing Multimeter record merged by name (3 + 5 = 8) instead of creating a duplicate");
 
-// === classification: clearance gates both sides ===
-await call(adminsMod, "PATCH", "/admins", {
-  headers: { "x-admin-token": rootToken },
-  body: { id: (await call(adminsMod, "GET", "/admins", { headers: { "x-admin-token": rootToken } })).data.find((a) => a.username === "lab1admin").id, grantClearance: { labId: "groomlake", tier: "black" } },
-});
-r = await call(inventoryMod, "POST", "/inventory?lab=groomlake", { headers: { "x-admin-token": lab1Token }, body: { name: "Secret Widget", qty: 5, classification: "black" } });
-const secretWidget = r.data.find((i) => i.name === "Secret Widget");
+// === an individually-tracked item (carries a serial number) keeps its attribute + serial, and never merges into an existing same-name record ===
+r = await call(inventoryMod, "POST", "/inventory?lab=groomlake", { headers: { "x-admin-token": lab1Token }, body: { name: "Spectrum Analyzer", qty: 1, attribute: "Rev B", serialNumber: "SA-9981" } });
+const analyzer = r.data.find((i) => i.name === "Spectrum Analyzer");
 
 r = await call(transfersMod, "POST", "/transfers", {
   headers: { "x-admin-token": lab1Token },
-  body: { sourceLabId: "groomlake", destinationLabId: labTwoId, direction: "send", items: [{ itemId: secretWidget.id, qty: 1 }], note: "classified-send" },
+  body: { sourceLabId: "groomlake", destinationLabId: labTwoId, direction: "send", items: [{ itemId: analyzer.id, qty: 1 }], note: "tracked-send" },
 });
-assert(r.status === 201, "cleared lab1admin sends a classified item");
-t = findByNote(r.data, "classified-send");
-assert(t.items[0].redacted !== true, "the proposer's own view of the item is never redacted");
+assert(r.status === 201, "lab1admin sends the individually-tracked analyzer");
+t = findByNote(r.data, "tracked-send");
 
 r = await call(transfersMod, "PATCH", "/transfers", { headers: { "x-admin-token": lab2Token }, body: { id: t.id, action: "accept" } });
-assert(r.status === 403, "lab2admin can't accept a classified item into Lab Two without clearance there");
-
-const lab2adminId = (await call(adminsMod, "GET", "/admins", { headers: { "x-admin-token": rootToken } })).data.find((a) => a.username === "lab2admin").id;
-await call(adminsMod, "PATCH", "/admins", { headers: { "x-admin-token": rootToken }, body: { id: lab2adminId, grantClearance: { labId: labTwoId, tier: "black" } } });
-
-r = await call(transfersMod, "PATCH", "/transfers", { headers: { "x-admin-token": lab2Token }, body: { id: t.id, action: "accept" } });
-assert(r.status === 200, "now cleared, lab2admin accepts the classified transfer");
+assert(r.status === 200, "lab2admin accepts it");
 
 r = await call(inventoryMod, "GET", "/inventory?lab=" + labTwoId, { headers: { "x-admin-token": lab2Token } });
-const labTwoSecret = r.data.find((i) => i.name === "Secret Widget");
-assert(!!labTwoSecret && labTwoSecret.classification === "black" && labTwoSecret.qty === 1, "a fresh classified record was created at the destination, preserving its tier");
+const labTwoAnalyzer = r.data.find((i) => i.name === "Spectrum Analyzer");
+assert(!!labTwoAnalyzer && labTwoAnalyzer.attribute === "Rev B" && labTwoAnalyzer.serialNumber === "SA-9981" && labTwoAnalyzer.qty === 1, "a fresh record was created at the destination, preserving both attribute and serial number");
 
 // === cancel: only the initiator can withdraw a still-pending proposal ===
 r = await call(transfersMod, "POST", "/transfers", {

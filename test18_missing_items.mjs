@@ -141,26 +141,5 @@ assert(r.status === 200, "root marks the rest of Erin's checkout returned (the b
 const ctLine = r.data.find((c) => c.id === erinId).items.find((it) => it.itemId === cableTester.id);
 assert(ctLine.returned === true && ctLine.missing !== true, "returned and missing can never both be true - marking returned clears a stale missing flag even via the default mark-returned action");
 
-// --- classification: missing status on a classified item stays gated the same as everything else about that item ---
-const rootAdmins = await call(adminsMod, "GET", "/admins", { headers: { "x-admin-token": rootToken } });
-const rootId = rootAdmins.data.find((a) => a.username === "root").id;
-const labtechId = rootAdmins.data.find((a) => a.username === "labtech").id;
-await call(adminsMod, "PATCH", "/admins", { headers: { "x-admin-token": rootToken }, body: { id: rootId, grantClearance: { labId: "groomlake", tier: "black" } } });
-
-r = await call(inventoryMod, "POST", "/inventory?lab=groomlake", { headers: { "x-admin-token": rootToken }, body: { name: "Secret Multimeter", qty: 3, classification: "black" } });
-const secretItem = r.data.find((i) => i.name === "Secret Multimeter");
-
-r = await call(checkoutsMod, "POST", "/checkouts?lab=groomlake", {
-  headers: { "x-admin-token": rootToken },
-  body: { name: "Dana", email: "dana@example.com", indefinite: true, items: [{ itemId: secretItem.id, name: "Secret Multimeter", qty: 1 }] },
-});
-const danaId = r.data.id;
-r = await call(checkoutsMod, "PATCH", "/checkouts?lab=groomlake", { headers: { "x-admin-token": rootToken }, body: { id: danaId, action: "reportMissing", itemIds: [secretItem.id] } });
-assert(r.status === 200, "cleared root reports the classified item missing");
-
-await call(adminsMod, "PATCH", "/admins", { headers: { "x-admin-token": rootToken }, body: { id: labtechId, labs: ["groomlake"] } });
-r = await call(checkoutsMod, "GET", "/checkouts?lab=groomlake", { headers: { "x-admin-token": labtechToken } });
-assert(!r.data.some((c) => c.id === danaId), "an uncleared admin can't see Dana's checkout at all (it's entirely one classified item) - missing status included, same as any other detail about it");
-
 console.log("\n" + (failures === 0 ? "ALL MISSING-ITEM TESTS PASSED" : `${failures} TEST(S) FAILED`));
 process.exit(failures === 0 ? 0 : 1);

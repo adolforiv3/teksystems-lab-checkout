@@ -1,6 +1,6 @@
 import { labRegistryStore } from "./stores.mjs";
 import { updateJSON } from "./occ.mjs";
-import { canAccessLab, hasClearance, isClient } from "./auth.mjs";
+import { canAccessLab, isClient } from "./auth.mjs";
 
 // The very first lab this app shipped with - kept as a fixed id so its
 // pre-existing inventory/checkout data (stored under the legacy
@@ -177,19 +177,13 @@ export async function resolveLab(labParam, admin) {
 
 // Which labs an authenticated admin is allowed to even see in a management
 // list. Non-superadmins: only their own assigned labs (unchanged from
-// before). Superadmins: everything *except* a lab that carries its own
-// lab-level classification tier they aren't individually cleared for -
-// administrative authority over the app doesn't imply read access into a
-// classified project, same principle as item-level classification.
+// before). Superadmins: everything.
 export function labsVisibleTo(labs, admin) {
   if (!admin) return [];
   if (admin.role !== "superadmin") {
     return labs.filter((l) => canAccessLab(admin, l.id));
   }
-  return labs.filter((l) => {
-    const tier = l.classification || "standard";
-    return tier === "standard" || hasClearance(admin, l.id, tier);
-  });
+  return labs;
 }
 
 // A lightweight cross-company listing: every lab's {id, name}, nothing else
@@ -198,10 +192,7 @@ export function labsVisibleTo(labs, admin) {
 // specific lab (unlike labsVisibleTo above) - some cross-lab actions, like
 // initiating a transfer request with a lab you don't otherwise manage (see
 // transfers.mjs), need to know that lab exists before an admin has any
-// other relationship to it. Still respects lab-level classification: a lab
-// carrying its own classification tier stays entirely invisible - not even
-// its name - to an admin without clearance for it, same rule as
-// labsVisibleTo's superadmin branch.
+// other relationship to it.
 export function labDirectory(labs, admin) {
   if (!admin) return [];
   // A Client DRI is never scoped to any lab, but is still a resolvable
@@ -211,31 +202,23 @@ export function labDirectory(labs, admin) {
   // exists to prevent (see isClient() and sanitizeItemForRole() in
   // inventory.mjs, the same rule applied here).
   if (isClient(admin)) return [];
-  return labs
-    .filter((l) => {
-      const tier = l.classification || "standard";
-      return tier === "standard" || hasClearance(admin, l.id, tier);
-    })
-    .map((l) => ({ id: l.id, name: l.name }));
+  return labs.map((l) => ({ id: l.id, name: l.name }));
 }
 
 // Never expose the raw entry passcode - only whether one is set. Used for
 // the single-lab, token-resolved lookup that unauthenticated visitors hit;
-// deliberately minimal (no accessToken echoed back, no classification, no
-// createdAt) since the caller already has everything they need to proceed.
+// deliberately minimal (no accessToken echoed back, no createdAt) since the
+// caller already has everything they need to proceed.
 export function publicLab(l) {
   return { id: l.id, name: l.name, locked: !!l.entryPasscode };
 }
 
 // Fuller shape for authenticated admin listings - includes the access
-// token (so the admin UI can render/copy the shareable link) and any
-// lab-level classification, but still never the raw passcode(s) - only
-// whether each is set. Same treatment now applies to classifiedReleaseCode,
-// the checkout-time "yes, you can take this restricted device" code - see
-// checkouts.mjs.
+// token (so the admin UI can render/copy the shareable link), but still
+// never the raw passcode - only whether one is set.
 export function adminLab(l) {
-  const { entryPasscode, classifiedReleaseCode, ...rest } = l;
-  return { ...rest, locked: !!entryPasscode, restrictedCheckoutSet: !!classifiedReleaseCode };
+  const { entryPasscode, ...rest } = l;
+  return { ...rest, locked: !!entryPasscode };
 }
 
 export function slugify(name) {

@@ -184,38 +184,3 @@ export function canAccessLab(admin, labId) {
 export function checkMasterPasscode(passcode) {
   return !!passcode && passcode === ADMIN_PASSCODE;
 }
-
-// --- Classification / clearance ---
-//
-// Deliberately separate from lab access (canAccessLab above) and from
-// superadmin status. A vendor being scoped to a lab (or a superadmin's
-// blanket admin authority) only ever grants visibility into that lab's
-// "standard" items. Seeing or touching a "black"/"ultraBlack" item requires
-// an *explicit* clearance grant for that specific lab and tier - including
-// for superadmins, and including for the legacy master-passcode bootstrap
-// identity, neither of which carry any clearances by default. This is a
-// deliberate least-privilege/need-to-know model: administrative authority
-// over the app (creating labs, managing accounts) is not the same thing as
-// being read into a specific compartment of what's stored in one of them.
-const CLASSIFICATION_TIERS = { standard: 0, black: 1, ultraBlack: 2 };
-
-export function isValidClassification(tier) {
-  return Object.prototype.hasOwnProperty.call(CLASSIFICATION_TIERS, tier);
-}
-
-function classificationRank(tier) {
-  return CLASSIFICATION_TIERS[tier] ?? 0;
-}
-
-// `admin.clearances` is an array of `{ labId, tier }` grants, managed only
-// by superadmins via admins.mjs. A grant at tier "ultraBlack" also covers
-// "black" for that same lab (clearance is a ceiling, not an exact match).
-export function hasClearance(admin, labId, tier) {
-  if (!tier || tier === "standard") return true;
-  if (!admin) return false;
-  const required = classificationRank(tier);
-  return (
-    Array.isArray(admin.clearances) &&
-    admin.clearances.some((c) => c && c.labId === labId && classificationRank(c.tier) >= required)
-  );
-}

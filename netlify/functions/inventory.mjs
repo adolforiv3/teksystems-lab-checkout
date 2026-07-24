@@ -1,9 +1,8 @@
-import { resolveAdmin, canAccessLab, hasClearance, isSuperadmin, isClient, isValidClassification } from "./lib/auth.mjs";
+import { resolveAdmin, canAccessLab, isSuperadmin, isClient } from "./lib/auth.mjs";
 import { labStore, labRegistryStore } from "./lib/stores.mjs";
 import { resolveLab, loadLabsForRead, labsVisibleTo } from "./lib/lab-registry.mjs";
 import { updateJSON, ConcurrentWriteError } from "./lib/occ.mjs";
 import { checkLowStockAndNotify, availableQty } from "./lib/lowstock.mjs";
-import { logClassifiedAccess, readAuditLog } from "./lib/audit.mjs";
 import { json, withErrorBoundary } from "./lib/http.mjs";
 
 class ApiError extends Error {
@@ -19,83 +18,30 @@ function sortInventory(inventory) {
   );
 }
 
-// Every item has a classification tier ("standard" by default). Seeing a
-// non-standard item in the ADMIN/management view requires an explicit
-// clearance grant for *this specific lab* at that tier (see lib/auth.mjs's
-// hasClearance) - normal lab access alone (canAccessLab) is not enough, and
-// neither is being a superadmin. This is what actually enforces "shouldn't
-// know about it" for staff: a classified item that fails this check is
-// dropped from an admin's response entirely, not just hidden client-side.
-function visibleTo(item, admin, labId) {
-  const tier = item.classification || "standard";
-  if (tier === "standard") return true;
-  return hasClearance(admin, labId, tier);
-}
-
-// Confidential fields stripped out for a caller browsing without clearance,
-// rather than hiding the item outright - see filterVisible() below for why
-// classified items are checkout-visible to anonymous shoppers now, even
-// though the admin-management view above still requires real clearance to
-// see one exist at all. Right now that's just the serial number (an
-// individual-device identifier, never meant to leave the admin side) and
-// the exact tier label - a shopper only ever learns "restricted", never
-// "black" vs "ultraBlack".
-function sanitizeForCheckout(item) {
-  const tier = item.classification || "standard";
-  if (tier === "standard") return item;
-  const { serialNumber, classification, ...rest } = item;
-  return { ...rest, restricted: true };
-}
-
 // The single place role-based field-stripping happens for item data,
 // rather than each endpoint growing its own copy of this logic (the drift
 // that produces is exactly what an external client's data exposure can't
 // afford to risk). For a "client" role - see isClient() in lib/auth.mjs -
-// this is deliberately an *allowlist*, not a blocklist like
-// sanitizeForCheckout's above: a blocklist only protects against the
-// fields it was written to know about, so a field added to the item shape
-// later (or anything already here that's really just internal shorthand,
-// like admin-authored notes, low-stock thresholds, or serial numbers)
-// would leak to an external client by default instead of by decision. An
-// allowlist can't drift that way - a new field is invisible to a client
-// until someone deliberately adds it here. Lab/project identity isn't
-// handled here at all, since it's simply never attached to a client-facing
-// row in the first place (see the ?all=1 client branch below).
+// this is deliberately an *allowlist*, not a blocklist: a blocklist only
+// protects against the fields it was written to know about, so a field
+// added to the item shape later (or anything already here that's really
+// just internal shorthand, like admin-authored notes, low-stock
+// thresholds, or serial numbers) would leak to an external client by
+// default instead of by decision. An allowlist can't drift that way - a
+// new field is invisible to a client until someone deliberately adds it
+// here. Lab/project identity isn't handled here at all, since it's simply
+// never attached to a client-facing row in the first place (see the ?all=1
+// client branch below).
 function sanitizeItemForRole(item, role) {
   if (role !== "client") return item;
-  const tier = item.classification || "standard";
   return {
     id: item.id,
     name: item.name,
     category: item.category || "",
+    attribute: item.attribute || "",
     qty: item.qty,
     available: item.available,
-    ...(tier !== "standard" ? { restricted: true } : {}),
   };
-}
-
-// POST/PUT/DELETE all still require canAccessLab further down regardless of
-// what this returns, so it only ever governs what a caller can *see* here,
-// never what they can modify - the actual "cannot change or modify a
-// restricted item" guarantee comes from the per-tier hasClearance re-checks
-// inside each write branch below, which apply no matter what GET returns.
-function filterVisible(inventory, admin, labId) {
-  if (admin) {
-    // Authenticated admin session (of any kind, including one scoped to a
-    // different lab or holding no clearance at all): unchanged "need to
-    // know" model - an admin who isn't individually cleared for this item's
-    // tier doesn't see it exist, management view included.
-    return inventory.filter((i) => visibleTo(i, admin, labId));
-  }
-  // Anonymous/checkout context - the shopper-facing item grid and cart.
-  // Classified devices are now checkout-visible to anyone holding the lab's
-  // link, same as any other item: clearance was always an admin-only
-  // credential a shopper could never hold, so gating *visibility* on it
-  // would make these devices impossible to ever hand out to someone
-  // traveling with one. Actually checking one out still requires either
-  // admin clearance or the lab's release passcode - see checkouts.mjs's
-  // POST handler - this only controls what shows up to browse/add to cart.
-  return inventory.map((i) => sanitizeForCheckout(i));
 }
 
 function visitorAccessOk(req, lab, admin, labId) {
@@ -142,17 +88,10 @@ function normalizeNoteHistory(raw) {
 // note edits on any other item in the lab. Returns the freshly written
 // inventory array only when that transition write actually happened, so
 // the caller knows whether it needs its own separate inventory read.
-async function writeNoteHistory({ store, labId, admin, itemId, rawHistory, actor }) {
+async function writeNoteHistory({ store, itemId, rawHistory }) {
   const currentInventory = (await store.get("inventory", { type: "json" })) || [];
   const target = currentInventory.find((i) => i.id === itemId);
   if (!target) throw new ApiError("item not found", 404);
-  const tier = target.classification || "standard";
-  // Same "item not found" (never 403) leak-prevention pattern as every
-  // other classified-item operation - a caller without clearance for this
-  // item's tier can't even confirm it exists by probing its notes.
-  if (tier !== "standard" && !hasClearance(admin, labId, tier)) {
-    throw new ApiError("item not found", 404);
-  }
 
   const normalized = normalizeNoteHistory(rawHistory);
   await updateJSON(store, notesKey(itemId), async () => normalized);
@@ -163,15 +102,6 @@ async function writeNoteHistory({ store, labId, admin, itemId, rawHistory, actor
     freshInventory = await updateJSON(store, "inventory", async (current) => {
       const inv = current || [];
       return inv.map((i) => (i.id === itemId ? { ...i, hasNotes: shouldHaveNotes } : i));
-    });
-  }
-  if (tier !== "standard") {
-    await logClassifiedAccess(store, {
-      action: "notes-update",
-      itemId,
-      itemName: target.name,
-      tier,
-      actor,
     });
   }
 
@@ -194,13 +124,8 @@ export default withErrorBoundary(async (req) => {
   // tags every row with labId/labName on purpose; this branch must never
   // let that leak - the actual security requirement this role exists to
   // satisfy - so those fields are simply never attached to a row here in
-  // the first place, not stripped after the fact. Every lab's inventory is
-  // read regardless of that lab's own lab-level classification tier (the
-  // labsVisibleTo gating below only applies to admin authority over a lab,
-  // which a client never has any of), and each item still goes through the
-  // same classification sanitization an anonymous shopper gets - see
-  // sanitizeItemForRole - so a client can never learn more about a
-  // classified item than anyone else browsing without clearance could.
+  // the first place, not stripped after the fact. See sanitizeItemForRole
+  // for the exact allowlist of fields a client ever sees.
   if (method === "GET" && isClient(admin) && url.searchParams.get("all") === "1") {
     const labs = await loadLabsForRead(labRegistryStore());
     const rows = (
@@ -227,14 +152,9 @@ export default withErrorBoundary(async (req) => {
   // branch rather than something reachable via `?lab=` - it isn't scoped to
   // a single lab's access-token model at all, so it needs a superadmin
   // session outright rather than a lab passcode or access token standing in
-  // for one. `labsVisibleTo` already excludes any lab carrying its own
-  // lab-level classification tier the superadmin isn't cleared for (see
-  // lib/lab-registry.mjs), and `filterVisible` below re-applies the same
-  // item-level clearance check inside each lab that a normal per-lab GET
-  // would - so this view can never surface an item the same admin couldn't
-  // already see by opening that lab directly. This fans out one read per
-  // visible lab, which is fine for an admin-only, low-frequency view but
-  // would not be the right pattern for anything on the shopper-facing path.
+  // for one. This fans out one read per visible lab, which is fine for an
+  // admin-only, low-frequency view but would not be the right pattern for
+  // anything on the shopper-facing path.
   if (method === "GET" && url.searchParams.get("all") === "1") {
     if (!isSuperadmin(admin)) {
       return json({ error: admin ? "superadmin access required" : "unauthorized" }, admin ? 403 : 401);
@@ -249,7 +169,7 @@ export default withErrorBoundary(async (req) => {
             labInventoryStore.get("checkouts", { type: "json" }),
           ]);
           const checkouts = labCheckouts || [];
-          return filterVisible(labInventory || [], admin, lab.id).map((item) => ({
+          return (labInventory || []).map((item) => ({
             ...item,
             labId: lab.id,
             labName: lab.name,
@@ -279,19 +199,6 @@ export default withErrorBoundary(async (req) => {
     return json({ error: "locked", locked: true }, 401);
   }
 
-  if (method === "GET" && url.searchParams.get("auditLog") === "1") {
-    // The classified-access audit trail is itself sensitive - readable only
-    // by an admin holding *some* clearance in this lab (black or
-    // ultraBlack), same gate as seeing a classified item in the first
-    // place. A normal lab admin with no clearance, or an uncleared
-    // superadmin, gets treated the same as an unscoped visitor here.
-    if (!hasClearance(admin, labId, "black")) {
-      return json({ error: admin ? "you don't have access to this lab" : "unauthorized" }, admin ? 403 : 401);
-    }
-    const log = await readAuditLog(store);
-    return json(log.slice().reverse()); // most recent first
-  }
-
   if (method === "GET" && url.searchParams.get("notes")) {
     // Fetches one item's full note history - the bulk listing below only
     // ever carries a cheap `hasNotes` boolean (see writeNoteHistory), so the
@@ -305,10 +212,6 @@ export default withErrorBoundary(async (req) => {
     const inv = (await store.get("inventory", { type: "json" })) || [];
     const target = inv.find((i) => i.id === itemId);
     if (!target) return json({ error: "item not found" }, 404);
-    const tier = target.classification || "standard";
-    if (tier !== "standard" && !hasClearance(admin, labId, tier)) {
-      return json({ error: "item not found" }, 404);
-    }
     // Lazy migration path: an item saved before this split may still carry
     // its history embedded directly on the item record - fall back to that
     // if the dedicated per-item key hasn't been written yet. The next save
@@ -320,10 +223,7 @@ export default withErrorBoundary(async (req) => {
 
   if (method === "GET") {
     const inventory = (await store.get("inventory", { type: "json" })) || [];
-    // Classified items are dropped here, server-side, before the array is
-    // ever serialized - a non-cleared caller's response simply doesn't
-    // contain them, the same as if they didn't exist.
-    return json(sortInventory(filterVisible(inventory, admin, labId)));
+    return json(sortInventory(inventory));
   }
 
   // every write below requires the requester to be an admin scoped to this lab.
@@ -333,24 +233,11 @@ export default withErrorBoundary(async (req) => {
   }
 
   const labName = lab ? lab.name : labId;
-  const actor = admin && admin.username ? admin.username : admin ? admin.id : "unknown";
 
   try {
     if (method === "POST") {
       const body = await req.json();
       if (!body.name || !(body.qty > 0)) return json({ error: "name and positive qty required" }, 400);
-
-      const classification =
-        typeof body.classification === "string" && body.classification ? body.classification : "standard";
-      if (!isValidClassification(classification)) {
-        return json({ error: "invalid classification tier" }, 400);
-      }
-      // Creating a classified item requires the same clearance as viewing
-      // one - you can't stash something in a compartment you don't
-      // yourself have access to.
-      if (classification !== "standard" && !hasClearance(admin, labId, classification)) {
-        return json({ error: `insufficient clearance to create a "${classification}" item in this lab` }, 403);
-      }
 
       const newItem = {
         id: crypto.randomUUID(),
@@ -359,15 +246,11 @@ export default withErrorBoundary(async (req) => {
         qty: body.qty,
         notes: body.notes || "",
         hasNotes: false, // note history itself lives at notes:<id> - see writeNoteHistory()
-        classification,
-        // Free-text device identifier (serial number, asset tag, etc.) -
-        // mainly meant for individually-tracked black/ultraBlack devices
-        // (the frontend only surfaces the field for those), but not
-        // restricted server-side since a standard item having one is
-        // harmless. No confidentiality logic needed here specifically: it's
-        // just another field on the item record, so it's already covered by
-        // the same classification filter that drops the whole item for an
-        // uncleared caller (see filterVisible/visibleTo above).
+        // Both free-text, optional, and purely for telling similar items
+        // apart at a glance - `attribute` for a utilitarian descriptor
+        // (color, brand, SKU, etc.), `serialNumber` for an individually-
+        // tracked device's own identifier.
+        attribute: typeof body.attribute === "string" ? body.attribute.trim() : "",
         serialNumber: typeof body.serialNumber === "string" ? body.serialNumber.trim() : "",
         lowStockThreshold: typeof body.lowStockThreshold === "number" ? body.lowStockThreshold : 0,
       };
@@ -375,15 +258,6 @@ export default withErrorBoundary(async (req) => {
         const inventory = current || [];
         return [...inventory, newItem];
       });
-      if (classification !== "standard") {
-        await logClassifiedAccess(store, {
-          action: "create",
-          itemId: newItem.id,
-          itemName: newItem.name,
-          tier: classification,
-          actor,
-        });
-      }
       // checkLowStockAndNotify is best-effort housekeeping on top of the
       // write above, which has already committed by this point - if the
       // notify step itself hits a problem (email hiccup, a second round of
@@ -391,14 +265,11 @@ export default withErrorBoundary(async (req) => {
       // throwing, so we fall back to the inventory we already know is
       // correct instead of turning a successful save into a 500.
       const finalInventory = (await checkLowStockAndNotify(labId, labName, store)) || writtenInventory;
-      return json(sortInventory(filterVisible(finalInventory, admin, labId)));
+      return json(sortInventory(finalInventory));
     }
 
     if (method === "PUT") {
-      const body = await req.json(); // { id, qty?, name?, category?, notes?, noteHistory?, lowStockThreshold?, classification? } - any subset
-      if (body.classification !== undefined && !isValidClassification(body.classification)) {
-        return json({ error: "invalid classification tier" }, 400);
-      }
+      const body = await req.json(); // { id, qty?, name?, category?, notes?, noteHistory?, lowStockThreshold?, attribute?, serialNumber? } - any subset
 
       // noteHistory is handled entirely separately from every other field
       // below (see writeNoteHistory) - it's the one field that no longer
@@ -411,39 +282,15 @@ export default withErrorBoundary(async (req) => {
         "category",
         "notes",
         "lowStockThreshold",
-        "classification",
+        "attribute",
         "serialNumber",
       ].some((k) => body[k] !== undefined);
 
       let inventorySnapshot = null;
 
       if (hasFieldUpdates) {
-        let touchedClassification = null; // set inside the mutator once we know the item's real tier(s)
         const writtenInventory = await updateJSON(store, "inventory", async (current) => {
           const inventory = current || [];
-          const target = inventory.find((i) => i.id === body.id);
-          // A caller without clearance for this item's *current* tier gets
-          // treated exactly like the item doesn't exist - re-checked fresh on
-          // every retry attempt in case clearance changed mid-flight. This is
-          // the load-bearing check: without it, an admin who merely has
-          // normal lab access could still edit/delete a classified item they
-          // were never supposed to be able to see, purely by guessing its id.
-          if (target && (target.classification || "standard") !== "standard") {
-            if (!hasClearance(admin, labId, target.classification)) {
-              throw new ApiError("item not found", 404);
-            }
-          }
-          // Reclassifying also requires clearance for the *new* tier -
-          // otherwise a cleared admin could hand a classified item off to a
-          // tier they don't actually hold themselves.
-          if (
-            body.classification !== undefined &&
-            body.classification !== "standard" &&
-            !hasClearance(admin, labId, body.classification)
-          ) {
-            throw new ApiError(`insufficient clearance to reclassify an item as "${body.classification}"`, 403);
-          }
-
           return inventory.map((i) => {
             if (i.id !== body.id) return i;
             const updated = { ...i };
@@ -454,20 +301,11 @@ export default withErrorBoundary(async (req) => {
             if (typeof body.lowStockThreshold === "number" && body.lowStockThreshold >= 0) {
               updated.lowStockThreshold = body.lowStockThreshold;
             }
+            if (typeof body.attribute === "string") updated.attribute = body.attribute.trim();
             if (typeof body.serialNumber === "string") updated.serialNumber = body.serialNumber.trim();
-            if (body.classification !== undefined) updated.classification = body.classification;
-            touchedClassification = updated.classification || "standard";
             return updated;
           });
         });
-        if (touchedClassification && touchedClassification !== "standard") {
-          await logClassifiedAccess(store, {
-            action: "update",
-            itemId: body.id,
-            tier: touchedClassification,
-            actor,
-          });
-        }
         // See the POST branch above - same best-effort fallback.
         inventorySnapshot = (await checkLowStockAndNotify(labId, labName, store)) || writtenInventory;
       }
@@ -476,11 +314,8 @@ export default withErrorBoundary(async (req) => {
       if (Array.isArray(body.noteHistory)) {
         const result = await writeNoteHistory({
           store,
-          labId,
-          admin,
           itemId: body.id,
           rawHistory: body.noteHistory,
-          actor,
         });
         responseNoteHistory = result.noteHistory;
         // Only overwrite inventorySnapshot if this call actually wrote to
@@ -497,7 +332,7 @@ export default withErrorBoundary(async (req) => {
         inventorySnapshot = (await store.get("inventory", { type: "json" })) || [];
       }
 
-      const visibleInventory = sortInventory(filterVisible(inventorySnapshot, admin, labId));
+      const visibleInventory = sortInventory(inventorySnapshot);
       // Keep the response shape backward compatible for ordinary field-update
       // PUTs (every existing caller expects the array directly) - only wrap
       // it when a noteHistory write actually happened, since that's the one
@@ -510,21 +345,10 @@ export default withErrorBoundary(async (req) => {
 
     if (method === "DELETE") {
       const { id } = await req.json();
-      let deletedTier = null;
       const inventory = await updateJSON(store, "inventory", async (current) => {
         const list = current || [];
-        const target = list.find((i) => i.id === id);
-        if (target && (target.classification || "standard") !== "standard") {
-          if (!hasClearance(admin, labId, target.classification)) {
-            throw new ApiError("item not found", 404);
-          }
-          deletedTier = target.classification;
-        }
         return list.filter((i) => i.id !== id);
       });
-      if (deletedTier) {
-        await logClassifiedAccess(store, { action: "delete", itemId: id, tier: deletedTier, actor });
-      }
       // Best-effort cleanup of the item's now-orphaned notes:<id> key - not
       // on the critical path (the item is already gone from `inventory`
       // either way), so a failure here is logged and swallowed rather than
@@ -534,7 +358,7 @@ export default withErrorBoundary(async (req) => {
       } catch (e) {
         console.error(`inventory DELETE: failed to clean up notes key for item "${id}" (non-fatal):`, e);
       }
-      return json(sortInventory(filterVisible(inventory, admin, labId)));
+      return json(sortInventory(inventory));
     }
   } catch (err) {
     if (err instanceof ApiError) return json({ error: err.message }, err.status);

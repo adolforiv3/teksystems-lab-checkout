@@ -6,7 +6,6 @@ import {
   resolveAdmin,
   isSuperadmin,
   findByUsername,
-  isValidClassification,
 } from "./lib/auth.mjs";
 import { ConcurrentWriteError } from "./lib/occ.mjs";
 import { json, withErrorBoundary } from "./lib/http.mjs";
@@ -101,14 +100,7 @@ export default withErrorBoundary(async (req) => {
   }
 
   if (method === "PATCH") {
-    // { id, username?, password?, role?, labs?, email?, grantClearance?: {labId, tier}, revokeClearance?: {labId} }
-    //
-    // Clearance is deliberately a separate action from role/labs edits
-    // above, not folded into "labs" - assigning someone to a lab (normal
-    // access) and clearing them to see that lab's black/ultraBlack items
-    // are different grants on purpose, per the compartmentalization model
-    // in lib/auth.mjs. Both require superadmin (already gated above), but
-    // are tracked and can be revoked independently.
+    // { id, username?, password?, role?, labs?, email? }
     const body = await req.json();
 
     const { list, error } = await runAdminMutation(() =>
@@ -118,28 +110,6 @@ export default withErrorBoundary(async (req) => {
 
         const target = admins[idx];
         const updated = { ...target };
-
-        if (body.grantClearance && typeof body.grantClearance.labId === "string") {
-          const { labId, tier } = body.grantClearance;
-          if (!isValidClassification(tier) || tier === "standard") {
-            throw new ApiError("clearance tier must be 'black' or 'ultraBlack'", 400);
-          }
-          const clearances = (Array.isArray(target.clearances) ? target.clearances : []).filter(
-            (c) => c.labId !== labId
-          );
-          clearances.push({
-            labId,
-            tier,
-            grantedAt: new Date().toISOString(),
-            grantedBy: requester.username || requester.id,
-          });
-          updated.clearances = clearances;
-        }
-        if (body.revokeClearance && typeof body.revokeClearance.labId === "string") {
-          updated.clearances = (Array.isArray(target.clearances) ? target.clearances : []).filter(
-            (c) => c.labId !== body.revokeClearance.labId
-          );
-        }
 
         if (typeof body.username === "string" && body.username.trim()) {
           const clash = findByUsername(admins, body.username);

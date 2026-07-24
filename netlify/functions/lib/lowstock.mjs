@@ -1,4 +1,4 @@
-import { loadAdmins, hasClearance } from "./auth.mjs";
+import { loadAdmins } from "./auth.mjs";
 import { sendEmail } from "./email.mjs";
 import { updateJSON } from "./occ.mjs";
 
@@ -36,18 +36,11 @@ function availableQtyFromIndex(item, index) {
   return Math.max(0, item.qty - (index.get(item.id) || 0));
 }
 
-// `requiredTier` gates the recipient list the same way inventory.mjs gates
-// reads/writes: for a classified item, "scoped to this lab" (or even
-// superadmin) is not sufficient on its own - a low-stock email naming a
-// "black"/"ultraBlack" item must only reach admins who hold clearance for
-// that specific lab and tier, or the alert itself becomes the leak.
-async function notifyLabRecipients(labId, labName, subject, text, requiredTier = "standard") {
+async function notifyLabRecipients(labId, labName, subject, text) {
   const admins = await loadAdmins();
   const recipients = admins.filter((a) => {
     if (!a.email) return false;
-    const scoped = a.role === "superadmin" || (a.labs || []).includes(labId);
-    if (!scoped) return false;
-    return hasClearance(a, labId, requiredTier);
+    return a.role === "superadmin" || (a.labs || []).includes(labId);
   });
   const results = [];
   for (const admin of recipients) {
@@ -175,9 +168,7 @@ export async function checkLowStockAndNotify(labId, labName, store) {
         `Heads up: "${item.name}" in ${labName} is down to ${avail} available ` +
         `(alert threshold: ${threshold}, total on hand: ${item.qty}).\n\n` +
         `Restock when you get a chance, or adjust the alert threshold from the admin panel.`;
-      // A classified item's low-stock alert must only reach admins cleared
-      // for its tier - see notifyLabRecipients above.
-      await notifyLabRecipients(labId, labName, subject, text, item.classification || "standard");
+      await notifyLabRecipients(labId, labName, subject, text);
     } catch (e) {
       console.error(`low-stock email failed for "${item.name}" in lab "${labId}" (non-fatal):`, e);
     }

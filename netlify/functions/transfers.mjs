@@ -1,9 +1,8 @@
-import { resolveAdmin, canAccessLab, hasClearance, loadAdmins } from "./lib/auth.mjs";
+import { resolveAdmin, canAccessLab, loadAdmins } from "./lib/auth.mjs";
 import { labStore, transfersStore, labRegistryStore } from "./lib/stores.mjs";
 import { loadLabsForRead } from "./lib/lab-registry.mjs";
 import { updateJSON, ConcurrentWriteError } from "./lib/occ.mjs";
 import { availableQty, checkLowStockAndNotify } from "./lib/lowstock.mjs";
-import { logClassifiedAccess } from "./lib/audit.mjs";
 import { sendEmail } from "./lib/email.mjs";
 import { json, withErrorBoundary } from "./lib/http.mjs";
 
@@ -40,59 +39,19 @@ function initiatorLabId(t) {
   return t.direction === "send" ? t.sourceLabId : t.destinationLabId;
 }
 
-function labClassOk(lab, admin) {
-  if (!lab) return false;
-  const tier = lab.classification || "standard";
-  return tier === "standard" || hasClearance(admin, lab.id, tier);
-}
-
-// A transfer is visible to an admin scoped to *either* side of it (or, for
-// a superadmin, either side they aren't blocked from by that lab's own
-// lab-level classification - see lib/lab-registry.mjs's labsVisibleTo,
-// same rule applied here).
-function canSeeTransfer(t, admin, labById) {
-  if (admin.role === "superadmin") {
-    return labClassOk(labById(t.sourceLabId), admin) || labClassOk(labById(t.destinationLabId), admin);
-  }
+// A transfer is visible to an admin scoped to *either* side of it.
+function canSeeTransfer(t, admin) {
   return canAccessLab(admin, t.sourceLabId) || canAccessLab(admin, t.destinationLabId);
 }
 
-// Item-level confidentiality mirrors checkouts.mjs's itemVisible: a
-// classified item's real name only reaches an admin holding clearance for
-// that tier *in the source lab* (where the item's classification is
-// authoritative) - everyone else sees that a restricted item is involved,
-// not what it is. Only resolved lines (a real itemId + classification, set
-// either at creation for a "send" or at fulfillment for a "request") can
-// carry anything to redact; a still-open request line is just free text
-// the requester wrote, nothing classified about it yet.
-function sanitizeItemsForViewer(items, admin, sourceLabId) {
-  if (!Array.isArray(items)) return items;
-  return items.map((it) => {
-    const tier = it.classification || "standard";
-    if (tier === "standard" || !it.itemId || hasClearance(admin, sourceLabId, tier)) return it;
-    return { ...it, name: "restricted item", redacted: true };
-  });
-}
-
-function sanitizeTransferForViewer(t, admin) {
-  return {
-    ...t,
-    items: sanitizeItemsForViewer(t.items, admin, t.sourceLabId),
-    fulfilled: sanitizeItemsForViewer(t.fulfilled, admin, t.sourceLabId),
-  };
-}
-
 // Best-effort - never blocks the actual transfer action, same principle as
-// the low-stock notifier. `requiredTier` gates the recipient list exactly
-// like notifyLabRecipients in lib/lowstock.mjs: a notification naming a
-// classified item must only reach admins cleared for it.
-async function notifyLab(labId, labName, subject, text, requiredTier = "standard") {
+// the low-stock notifier.
+async function notifyLab(labId, labName, subject, text) {
   try {
     const admins = await loadAdmins();
     const recipients = admins.filter((a) => {
       if (!a.email) return false;
-      const scoped = a.role === "superadmin" || (a.labs || []).includes(labId);
-      return scoped && hasClearance(a, labId, requiredTier);
+      return a.role === "superadmin" || (a.labs || []).includes(labId);
     });
     for (const admin of recipients) {
       await sendEmail({ to: admin.email, subject, text, fromName: `${labName} Supply Checkout` });
@@ -100,16 +59,6 @@ async function notifyLab(labId, labName, subject, text, requiredTier = "standard
   } catch (e) {
     console.error(`transfers: notification email failed for lab "${labId}" (non-fatal):`, e);
   }
-}
-
-function highestTier(items) {
-  const rank = { standard: 0, black: 1, ultraBlack: 2 };
-  let top = "standard";
-  for (const it of items || []) {
-    const tier = it.classification || "standard";
-    if ((rank[tier] || 0) > (rank[top] || 0)) top = tier;
-  }
-  return top;
 }
 
 export default withErrorBoundary(async (req) => {
@@ -125,9 +74,9 @@ export default withErrorBoundary(async (req) => {
 
   if (method === "GET") {
     const list = (await store.get("transfers", { type: "json" })) || [];
-    const visible = list.filter((t) => canSeeTransfer(t, admin, labById));
+    const visible = list.filter((t) => canSeeTransfer(t, admin));
     visible.sort((a, b) => new Date(b.requestedAt) - new Date(a.requestedAt));
-    return json(visible.map((t) => sanitizeTransferForViewer(t, admin)));
+    return json(visible);
   }
 
   try {
@@ -170,18 +119,11 @@ export default withErrorBoundary(async (req) => {
           if (!(typeof qty === "number" && qty > 0)) return json({ error: "each item needs a positive qty" }, 400);
           const invItem = inventory.find((i) => i.id === raw.itemId);
           if (!invItem) return json({ error: "item not found" }, 404);
-          const tier = invItem.classification || "standard";
-          // Same "item not found" masking as inventory.mjs's own writes -
-          // never confirms a classified item exists to a caller who isn't
-          // cleared for it, even via a crafted request.
-          if (tier !== "standard" && !hasClearance(admin, sourceLabId, tier)) {
-            return json({ error: "item not found" }, 404);
-          }
           const avail = availableQty(invItem, checkouts);
           if (qty > avail) return json({ error: `not enough "${invItem.name}" available (${avail} left)` }, 409);
           if (seen.has(raw.itemId)) continue;
           seen.add(raw.itemId);
-          items.push({ itemId: invItem.id, name: invItem.name, category: invItem.category || "", qty, classification: tier });
+          items.push({ itemId: invItem.id, name: invItem.name, category: invItem.category || "", qty });
         }
         if (items.length === 0) return json({ error: "at least one item is required" }, 400);
       } else {
@@ -227,11 +169,10 @@ export default withErrorBoundary(async (req) => {
         `${sourceLab.name} and ${destinationLab.name} have a pending transfer that needs your team to ${approverAction} it.\n\n` +
           items.map((it) => `  • ${it.name} × ${it.qty}`).join("\n") +
           (note ? `\n\nNote: ${note}` : "") +
-          `\n\nReview it from the Transfers section in the admin panel.`,
-        highestTier(items)
+          `\n\nReview it from the Transfers section in the admin panel.`
       );
 
-      return json(list.filter((t) => canSeeTransfer(t, admin, labById)).map((t) => sanitizeTransferForViewer(t, admin)), 201);
+      return json(list.filter((t) => canSeeTransfer(t, admin)), 201);
     }
 
     if (method === "PATCH") {
@@ -260,7 +201,7 @@ export default withErrorBoundary(async (req) => {
           };
           return next;
         });
-        return json(list.filter((t) => canSeeTransfer(t, admin, labById)).map((t) => sanitizeTransferForViewer(t, admin)));
+        return json(list.filter((t) => canSeeTransfer(t, admin)));
       }
 
       if (action === "deny") {
@@ -295,11 +236,10 @@ export default withErrorBoundary(async (req) => {
             `Transfer denied — ${denied.sourceLabName} ↔ ${denied.destinationLabName}`,
             `Your transfer ${denied.direction === "send" ? "to" : "request from"} ${
               denied.direction === "send" ? denied.destinationLabName : denied.sourceLabName
-            } was denied.\n\n` + denied.items.map((it) => `  • ${it.name} × ${it.qty}`).join("\n"),
-            highestTier(denied.items)
+            } was denied.\n\n` + denied.items.map((it) => `  • ${it.name} × ${it.qty}`).join("\n")
           );
         }
-        return json(list.filter((t) => canSeeTransfer(t, admin, labById)).map((t) => sanitizeTransferForViewer(t, admin)));
+        return json(list.filter((t) => canSeeTransfer(t, admin)));
       }
 
       if (action === "accept") {
@@ -343,15 +283,6 @@ export default withErrorBoundary(async (req) => {
 
             if (t.direction === "send") {
               moves = t.items.map((it) => ({ itemId: it.itemId, qty: it.qty }));
-              // The accepting admin is on the destination side - receiving a
-              // classified item into their own lab's inventory needs the same
-              // clearance creating one from scratch would.
-              for (const it of t.items) {
-                const tier = it.classification || "standard";
-                if (tier !== "standard" && !hasClearance(admin, t.destinationLabId, tier)) {
-                  throw new ApiError(`insufficient clearance to receive a "${tier}" item in this lab`, 403);
-                }
-              }
             } else {
               const fulfillment = Array.isArray(body.fulfillment) ? body.fulfillment : [];
               if (fulfillment.length === 0) {
@@ -421,20 +352,6 @@ export default withErrorBoundary(async (req) => {
             for (const m of moves) {
               const item = inv.find((i) => i.id === m.itemId);
               if (!item) throw new ApiError("an item in this transfer no longer exists at the source", 409);
-              const tier = item.classification || "standard";
-              // Only relevant for a "request": the admin fulfilling it is
-              // on the source side, freshly picking real items right now,
-              // so the same clearance check any other source-side write
-              // gets applies here too. For a "send", the accepting admin is
-              // on the *destination* side and was never expected to hold
-              // source-lab clearance at all - the source-side admin who
-              // proposed the send already had their own clearance checked
-              // at creation time, and re-checking it here against whoever
-              // happens to be accepting would wrongly reject a perfectly
-              // valid destination-side accept.
-              if (transferSnapshot.direction === "request" && tier !== "standard" && !hasClearance(admin, transferSnapshot.sourceLabId, tier)) {
-                throw new ApiError("item not found", 404);
-              }
               const avail = availableQty(item, checkouts);
               if (m.qty > avail) {
                 throw new ApiError(`not enough "${item.name}" available at the source now (${avail} left)`, 409);
@@ -444,7 +361,7 @@ export default withErrorBoundary(async (req) => {
                 name: item.name,
                 category: item.category || "",
                 qty: m.qty,
-                classification: tier,
+                attribute: item.attribute || "",
                 serialNumber: item.serialNumber || "",
               });
             }
@@ -469,18 +386,15 @@ export default withErrorBoundary(async (req) => {
           await updateJSON(destStoreRef, "inventory", async (current) => {
             let inv = current || [];
             for (const rm of resolvedMoves) {
-              // Classified items always get their own fresh record at the
-              // destination rather than merging into an existing same-name
-              // one - this app's classified items are individually tracked
-              // by serial number, and merging two different physical
-              // devices into one qty>1 record with a single serial field
-              // would silently lose that. Standard (bulk/consumable) items
-              // merge into a matching name if the destination already
-              // stocks it, same as any other restock.
-              const existing =
-                rm.classification === "standard"
-                  ? inv.find((i) => i.name.toLowerCase() === rm.name.toLowerCase() && (i.classification || "standard") === "standard")
-                  : null;
+              // An item carrying a serial number is individually tracked -
+              // merging two different physical devices into one qty>1
+              // record would silently lose one's serial number, so it
+              // always gets its own fresh record at the destination
+              // instead. Everything else merges into a matching name if the
+              // destination already stocks it, same as any other restock.
+              const existing = !rm.serialNumber
+                ? inv.find((i) => i.name.toLowerCase() === rm.name.toLowerCase() && !i.serialNumber)
+                : null;
               if (existing) {
                 inv = inv.map((i) => (i.id === existing.id ? { ...i, qty: i.qty + rm.qty } : i));
               } else {
@@ -493,7 +407,7 @@ export default withErrorBoundary(async (req) => {
                     qty: rm.qty,
                     notes: "",
                     hasNotes: false,
-                    classification: rm.classification,
+                    attribute: rm.attribute,
                     serialNumber: rm.serialNumber,
                     lowStockThreshold: 0,
                   },
@@ -512,12 +426,6 @@ export default withErrorBoundary(async (req) => {
           throw e;
         }
 
-        for (const rm of resolvedMoves) {
-          if (rm.classification !== "standard") {
-            await logClassifiedAccess(sourceStoreRef, { action: "transfer-out", itemId: rm.itemId, itemName: rm.name, tier: rm.classification, actor });
-            await logClassifiedAccess(destStoreRef, { action: "transfer-in", itemName: rm.name, tier: rm.classification, actor });
-          }
-        }
         // Stock leaving the source could cross its low-stock threshold;
         // stock arriving at the destination could just as easily clear an
         // existing one there - check both sides.
@@ -534,7 +442,7 @@ export default withErrorBoundary(async (req) => {
           next[idx] = {
             ...t,
             status: "accepted",
-            fulfilled: resolvedMoves.map((rm) => ({ itemId: rm.itemId, name: rm.name, qty: rm.qty, classification: rm.classification })),
+            fulfilled: resolvedMoves.map((rm) => ({ itemId: rm.itemId, name: rm.name, qty: rm.qty })),
             respondedBy: actor,
             respondedAt: nowIso,
             history: [...t.history, { at: nowIso, action: "accepted", by: actor, items: resolvedMoves.map((rm) => ({ itemId: rm.itemId, name: rm.name, qty: rm.qty })) }],
@@ -549,11 +457,10 @@ export default withErrorBoundary(async (req) => {
           `Transfer accepted — ${transferSnapshot.sourceLabName} ↔ ${transferSnapshot.destinationLabName}`,
           `Your transfer ${transferSnapshot.direction === "send" ? "to" : "request from"} ${
             transferSnapshot.direction === "send" ? transferSnapshot.destinationLabName : transferSnapshot.sourceLabName
-          } was accepted.\n\n` + resolvedMoves.map((rm) => `  • ${rm.name} × ${rm.qty}`).join("\n"),
-          highestTier(resolvedMoves)
+          } was accepted.\n\n` + resolvedMoves.map((rm) => `  • ${rm.name} × ${rm.qty}`).join("\n")
         );
 
-        return json(finalList.filter((t) => canSeeTransfer(t, admin, labById)).map((t) => sanitizeTransferForViewer(t, admin)));
+        return json(finalList.filter((t) => canSeeTransfer(t, admin)));
       }
 
       return json({ error: "unknown action" }, 400);

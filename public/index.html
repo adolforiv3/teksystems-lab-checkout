@@ -148,6 +148,7 @@
     font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:.06em;
   }
   .item-name{ font-weight:600; font-size:15.5px; line-height:1.3; letter-spacing:-0.01em; }
+  .item-attribute{ font-size:12px; color:var(--ink-soft); font-family:monospace; }
   .item-notes{ font-size:12.5px; color:var(--ink-soft); }
   .item-stock{
     font-size:12.5px; color:var(--ink-soft);
@@ -323,8 +324,8 @@
   /* A grid item's default min-width is `auto`, which for a form control
      resolves to its own intrinsic content width, not 0 - so an <input> or
      <select> refuses to shrink below that floor no matter what the fr
-     column asks for. With five columns (name/category/qty/classification/
-     button) each input hitting its own ~200px floor, the row's real total
+     column asks for. With several columns (name/category/qty/button) each
+     input hitting its own ~200px floor, the row's real total
      width blew straight past the card's available space, and since
      .admin-grid-form has no explicit width of its own, the overflow wasn't
      absorbed by the container - it just pushed the trailing Add button out
@@ -348,11 +349,11 @@
      drift depending on content - an empty header, a short "delete" link,
      etc. previously had no fixed anchor). */
   #invTable{ min-width:860px; table-layout:fixed; }
-  /* The first column stacks a variable number of elements (classification
-     badge, name, serial number, category) depending on the item, so that
-     row's total height varies a lot between a plain standard item and a
-     restricted one. Every OTHER column in that row only ever holds one
-     short control (a button, a stepper, a number). Top-aligning those too
+  /* The first column stacks a variable number of elements (name, attribute,
+     serial number, category) depending on the item, so that row's total
+     height varies a lot between a bare-bones item and a fully-described one.
+     Every OTHER column in that row only ever holds one short control (a
+     button, a stepper, a number). Top-aligning those too
      (the generic td rule above) pins them to the very top of an otherwise
      tall row, leaving a lopsided gap underneath and making the row read as
      misaligned - centering them against the row's actual height instead
@@ -379,6 +380,11 @@
   .serial-edit-btn{ background:none; border:none; cursor:pointer; font-size:12px; color:var(--ink-soft); padding:0; line-height:1; flex-shrink:0; }
   .serial-edit-btn:hover{ color:var(--teal); }
   .serial-row .serialEdit{ font-size:16px; padding:4px 8px; flex:1; min-width:0; }
+  .attribute-row{ display:flex; align-items:center; gap:6px; margin-top:2px; }
+  .attribute-label{ font-size:12px; color:var(--ink-soft); }
+  .attribute-edit-btn{ background:none; border:none; cursor:pointer; font-size:12px; color:var(--ink-soft); padding:0; line-height:1; flex-shrink:0; }
+  .attribute-edit-btn:hover{ color:var(--teal); }
+  .attribute-row .attributeEdit{ font-size:16px; padding:4px 8px; flex:1; min-width:0; }
   .edit-items-row td, .history-row td, .person-detail-marker td, .txn-row td, .person-history-row td{ background:var(--paper); border-bottom:1px solid var(--border); }
   .edit-items-panel{ padding:8px 2px; }
   .history-trail{ display:flex; flex-direction:column; gap:2px; }
@@ -747,7 +753,6 @@
 
         <div class="admin-nav-group-label">Inventory</div>
         <button class="admin-nav-btn" type="button" data-target="addItem">Add Item</button>
-        <button class="admin-nav-btn" type="button" id="auditLogNavBtn" data-target="auditLog" style="display:none;">Classified Access Log</button>
         <button class="admin-nav-btn" type="button" data-target="kits">Kits</button>
         <button class="admin-nav-btn" type="button" data-target="inventory">Lab Inventory</button>
 
@@ -772,21 +777,17 @@
 
         <div class="admin-section" data-admin-section="addItem">
           <h2>Add Item</h2>
-          <div class="admin-grid-form" style="grid-template-columns:2fr 1fr 1fr 1fr auto;">
+          <div class="admin-grid-form" style="grid-template-columns:2fr 1fr 1fr auto;">
             <input type="text" id="newName" placeholder="Item name" class="mono">
             <input type="text" id="newCat" placeholder="Category" class="mono">
             <input type="number" id="newQty" placeholder="Qty" class="mono">
-            <select id="newClassification" class="mono" title="Only visible to admins holding clearance for this tier in this lab.">
-              <option value="standard">Standard</option>
-              <option value="black">Black</option>
-              <option value="ultraBlack">Ultra Black</option>
-            </select>
             <button class="btn btn-teal" id="addItemBtn">Add</button>
           </div>
-          <div id="newSerialWrap" style="display:none; margin:-4px 0 14px;">
-            <input type="text" id="newSerial" placeholder="Serial number / device ID" class="mono" style="width:100%; max-width:340px;">
+          <div style="display:flex; gap:10px; margin:-4px 0 14px; flex-wrap:wrap;">
+            <input type="text" id="newAttribute" placeholder="Color / brand / SKU / etc. (optional)" class="mono" style="flex:1; min-width:220px;">
+            <input type="text" id="newSerial" placeholder="Serial number / device ID (optional)" class="mono" style="flex:1; min-width:220px;">
           </div>
-          <div class="small-note">Category is a free-text label (e.g. "Multimeters", "Cabling", "Consumables") used for the filter chips. Black/Ultra Black items are invisible to anyone (including other admins and superadmins) who hasn't been individually granted clearance for this lab at that tier from Admin Accounts — and you need your own clearance to create one. Black/Ultra Black items also get an optional serial number field, for individually-tracked devices rather than bulk consumables.</div>
+          <div class="small-note">Category is a free-text label (e.g. "Multimeters", "Cabling", "Consumables") used for the filter chips. Attribute is an optional free-text descriptor — color, brand, SKU, whatever's useful for telling similar items apart. Serial number is optional too, for individually-tracked devices rather than bulk consumables.</div>
         </div>
 
         <div class="admin-section" data-admin-section="adminAccounts" id="adminAccountsSection">
@@ -814,7 +815,7 @@
 
         <div class="admin-section" data-admin-section="companyInventory">
           <h2>Company Inventory (<span id="companyInvCount">0</span> items across <span id="companyInvLabCount">0</span> labs)<button class="btn btn-ghost" id="companyInvRefreshBtn" type="button" style="margin-left:auto;">↻ Refresh</button></h2>
-          <div class="small-note" style="margin-bottom:12px;">Every item across every lab you can see, in one list. Same clearance rules as opening each lab directly — a lab or item you're not cleared for still won't show up here. Read-only; use "Manage" to jump into a lab and make changes there.</div>
+          <div class="small-note" style="margin-bottom:12px;">Every item across every lab you can see, in one list. Read-only; use "Manage" to jump into a lab and make changes there.</div>
           <input type="text" id="companyInvSearch" class="mono" placeholder="search by item, category, or lab…" style="width:100%;max-width:320px;margin-bottom:12px;">
           <table id="companyInvTable">
             <colgroup>
@@ -995,12 +996,6 @@
             <input type="text" id="adminNewLabName" placeholder="New lab name" class="mono">
             <button class="btn btn-teal" id="adminAddLabBtn" type="button">Add Lab</button>
           </div>
-        </div>
-
-        <div class="admin-section" data-admin-section="auditLog">
-          <h2>Classified Access Log</h2>
-          <div class="small-note" style="margin-bottom:12px;">Every create/edit/delete of a Black or Ultra Black item in this lab, with who did it and when. Visible only to admins holding some clearance in this lab — same gate as seeing the items themselves.</div>
-          <div id="auditLogList"></div>
         </div>
 
         <div class="admin-section" data-admin-section="qrAccess">
@@ -1758,8 +1753,8 @@ function buildItemCard(item){
   if(avail !== 0){ card.style.borderLeftColor = col.solid; }
   card.innerHTML = `
     <div class="item-cat mono" style="color:${col.solid}">${item.category||'uncategorized'}</div>
-    ${item.restricted ? `<div class="badge" title="Requires a release passcode at checkout" style="background:var(--red-bg); color:var(--red); margin-bottom:4px; display:inline-block;">Restricted</div>` : ''}
     <div class="item-name">${item.name}</div>
+    ${item.attribute ? `<div class="item-attribute">${escapeAttr(item.attribute)}</div>` : ''}
     ${item.notes ? `<div class="item-notes">${item.notes}</div>` : ''}
     <div class="item-stock">
       <span>available</span>
@@ -2112,29 +2107,6 @@ document.getElementById('submitCheckout').onclick = async ()=>{
     return;
   }
 
-  // Restricted (Black/Ultra Black) items are visible in the grid and can be
-  // added to the cart like anything else, but taking one still needs the
-  // lab's release passcode - asked for once here, covering the whole cart,
-  // rather than per item. Cancelling backs out of checkout entirely rather
-  // than silently dropping the restricted item(s), since the shopper may
-  // specifically be here for that device.
-  const hasRestricted = cart.some(c=>{
-    const it = inventory.find(i=>i.id===c.itemId);
-    return it && it.restricted;
-  });
-  let releaseCode;
-  if(hasRestricted){
-    releaseCode = await showModal({
-      title: 'Release Passcode Required',
-      msg: 'Your cart includes a restricted item. Enter the release passcode (from a lab admin) to continue.',
-      isPassword:true, inputType:'password', okText:'Continue'
-    });
-    if(releaseCode === null){
-      btn.disabled = false; btn.textContent = 'Confirm Checkout';
-      return;
-    }
-  }
-
   btn.textContent = 'Saving…';
 
   try{
@@ -2143,7 +2115,6 @@ document.getElementById('submitCheckout').onclick = async ()=>{
       returnDate: indefinite ? null : returnDate,
       items: cart,
       labName: currentLab.name,
-      ...(hasRestricted ? { releaseCode } : {})
     });
     cart = [];
     await loadData();
@@ -2408,10 +2379,7 @@ let clientSearchTerm = '';
 let clientTab = 'catalog';
 
 // Labs the CURRENT admin is allowed to see/manage - superadmins get
-// everything (except a lab that itself carries a classification tier they
-// aren't cleared for - see labsVisibleTo in lib/lab-registry.mjs, already
-// applied server-side to whatever `allLabs` contains), lab-admins are
-// restricted to their assigned labs.
+// everything, lab-admins are restricted to their assigned labs.
 function visibleLabsForAdmin(){
   if(!adminUser) return [];
   if(adminUser.role === 'superadmin') return allLabs;
@@ -2495,7 +2463,6 @@ async function enterAdminView(sectionToShow){
   renderAdminLabList();
   renderQR();
   renderAdmin();
-  refreshAuditLogAccess();
   // Default landing section: Admin Accounts for a superadmin (the section
   // they land on most often to manage vendor/lab access), falling back to
   // Inventory for a lab-admin, who can't see the Admin Accounts section at
@@ -2554,8 +2521,8 @@ function buildClientItemCard(item){
   if(item.available !== 0){ card.style.borderLeftColor = col.solid; }
   card.innerHTML = `
     <div class="item-cat mono" style="color:${col.solid}">${item.category||'uncategorized'}</div>
-    ${item.restricted ? `<div class="badge" title="Requires a release passcode at checkout" style="background:var(--red-bg); color:var(--red); margin-bottom:4px; display:inline-block;">Restricted</div>` : ''}
     <div class="item-name">${item.name}</div>
+    ${item.attribute ? `<div class="item-attribute">${escapeAttr(item.attribute)}</div>` : ''}
     <div class="item-stock">
       <span>available</span>
       <span class="stock-num ${item.available===0?'zero':''}">${item.available} / ${item.qty}</span>
@@ -2716,7 +2683,6 @@ function renderAdminLabList(){
         <button class="lab-icon-btn share-lab-btn" type="button" title="Copy this lab's private share link">🔗</button>
         <button class="lab-icon-btn regen-lab-btn" type="button" title="Issue a new share link (immediately invalidates the old one)">♻️</button>
         <button class="lab-icon-btn passcode-lab-btn" type="button" title="${lab.locked ? 'Change or remove entry passcode' : 'Set an entry passcode'}">${lab.locked ? '🔒' : '🔓'}</button>
-        <button class="lab-icon-btn release-lab-btn" type="button" title="${lab.restrictedCheckoutSet ? 'Change or remove restricted-item release passcode' : 'Set a release passcode for restricted (Black/Ultra Black) checkouts'}">${lab.restrictedCheckoutSet ? '🛡️' : '🛡'}</button>
         <button class="lab-icon-btn rename-lab-btn" type="button" title="Rename lab">✎</button>
         ${isSuper ? '<button class="lab-icon-btn del-lab-btn" type="button" title="Remove from list">🗑</button>' : ''}
       </div>
@@ -2777,24 +2743,6 @@ function renderAdminLabList(){
         if(isCurrent) labPasscode = newPass;
         renderAdminLabList();
         showToast(newPass ? 'Passcode set' : 'Passcode removed');
-      }catch(err){
-        handleAdminApiError(err);
-      }
-    };
-    row.querySelector('.release-lab-btn').onclick = async ()=>{
-      const msg = lab.restrictedCheckoutSet
-        ? `Anyone checking out a Black/Ultra Black item in "${lab.name}" without personal clearance must enter this code. Enter a new one to change it, or leave blank and save to remove it (restricted items become impossible to check out by anyone without clearance until a new code is set).`
-        : `Set a passcode that lets someone without clearance still check out a Black/Ultra Black item in "${lab.name}" - share it only with staff authorized to release restricted devices, e.g. someone signing a device out for travel.`;
-      const newCode = await showModal({
-        title: (lab.restrictedCheckoutSet ? 'Change' : 'Set') + ' restricted-item release passcode',
-        msg, isPassword:true, inputType:'text', okText:'Save'
-      });
-      if(newCode === null) return;
-      try{
-        const result = await apiWrite('/.netlify/functions/labs', 'PATCH', {id:lab.id, classifiedReleaseCode:newCode}, true);
-        allLabs = result.labs;
-        renderAdminLabList();
-        showToast(newCode ? 'Release passcode set' : 'Release passcode removed');
       }catch(err){
         handleAdminApiError(err);
       }
@@ -2865,7 +2813,6 @@ async function switchAdminToLab(lab){
   renderAdminLabList();
   renderQR();
   renderAdmin();
-  refreshAuditLogAccess();
   showToast('Switched to ' + currentLab.name);
 }
 
@@ -2885,8 +2832,8 @@ function buildCompanyInvRow(row){
   const tr = document.createElement('tr');
   tr.innerHTML = `
     <td style="min-width:200px;">
-      ${row.classification && row.classification !== 'standard' ? `<span class="badge" style="background:var(--red-bg); color:var(--red); margin-bottom:4px; display:inline-block;">${row.classification === 'ultraBlack' ? 'Ultra Black' : 'Black'}</span><br>` : ''}
       <span class="mono">${escapeAttr(row.name)}</span>
+      ${row.attribute ? `<br><span class="item-attribute">${escapeAttr(row.attribute)}</span>` : ''}
     </td>
     <td>
       <span class="cat-dot" style="background:${catCol.solid}"></span>
@@ -3043,81 +2990,13 @@ function renderAdminAccounts(){
         ${escapeAttr(acc.username)}
         <span class="mono" style="font-size:10px; color:var(--ink-soft); text-transform:uppercase; margin-left:4px;">${acc.role}</span>
         <div class="small-note" style="margin-top:2px; font-weight:400;">${escapeAttr(labsText)}${acc.email ? ' · ' + escapeAttr(acc.email) : ' · no email on file (won\'t get low-stock alerts)'}</div>
-        <div class="clearance-chips" style="margin-top:6px; display:flex; flex-wrap:wrap; gap:6px;"></div>
       </span>
       ${isSelf ? '<span class="badge-current mono">you</span>' : ''}
       <div class="lab-card-actions">
-        ${acc.role !== 'client' ? '<button class="lab-icon-btn grant-clearance-btn" type="button" title="Grant black/ultraBlack clearance for a lab">🔐</button>' : ''}
         <button class="lab-icon-btn edit-admin-btn" type="button" title="Edit account">✎</button>
         <button class="lab-icon-btn del-admin-btn" type="button" title="Remove account">🗑</button>
       </div>
-      <div class="grant-clearance-form" style="display:none; width:100%; margin-top:10px; padding-top:10px; border-top:1px solid var(--border); gap:8px; align-items:center;">
-        <select class="mono grant-lab-select" style="flex:1; min-width:0;"></select>
-        <select class="mono grant-tier-select">
-          <option value="black">Black</option>
-          <option value="ultraBlack">Ultra Black</option>
-        </select>
-        <button class="btn btn-teal grant-confirm-btn" type="button">Grant</button>
-      </div>
     `;
-
-    // Clearance is a per-lab concept a client account doesn't have (see
-    // isClient() in lib/auth.mjs) - their view of classified items is
-    // fixed to the same shopper-style sanitization for everyone, never
-    // widened by a grant, so the whole clearance UI (and its "no
-    // classified clearances" placeholder, which would be misleading here
-    // rather than just empty) is skipped entirely for them. Edit/delete
-    // stay available either way - handled further down, outside this
-    // block, so a client account is never left without those.
-    if(acc.role === 'client'){
-      row.querySelector('.clearance-chips').remove();
-    } else {
-      // Existing clearances, each removable independently - grant/revoke
-      // are per lab+tier, not a single toggle, mirroring the backend model.
-      const chipsWrap = row.querySelector('.clearance-chips');
-      const clearances = Array.isArray(acc.clearances) ? acc.clearances : [];
-      if(clearances.length === 0){
-        chipsWrap.innerHTML = '<span class="mono" style="font-size:10.5px; color:var(--ink-soft);">no classified clearances</span>';
-      } else {
-        clearances.forEach(c=>{
-          const l = allLabs.find(x=>x.id===c.labId);
-          const chip = document.createElement('span');
-          chip.className = 'chip';
-          chip.style.padding = '4px 10px';
-          chip.style.cursor = 'default';
-          chip.innerHTML = `${escapeAttr(l ? l.name : c.labId)} · ${c.tier === 'ultraBlack' ? 'Ultra Black' : 'Black'} <span class="revoke-clearance" style="cursor:pointer; color:var(--red); margin-left:4px;" title="Revoke">✕</span>`;
-          chip.querySelector('.revoke-clearance').onclick = async ()=>{
-            try{
-              allAdmins = await apiWrite('/.netlify/functions/admins', 'PATCH', {id:acc.id, revokeClearance:{labId:c.labId}}, true);
-              renderAdminAccounts();
-              showToast('Clearance revoked');
-            }catch(err){
-              handleAdminApiError(err);
-            }
-          };
-          chipsWrap.appendChild(chip);
-        });
-      }
-
-      const grantForm = row.querySelector('.grant-clearance-form');
-      const labSelect = row.querySelector('.grant-lab-select');
-      labSelect.innerHTML = allLabs.map(l=>`<option value="${escapeAttr(l.id)}">${escapeAttr(l.name)}</option>`).join('') || '<option value="">No labs yet</option>';
-      row.querySelector('.grant-clearance-btn').onclick = ()=>{
-        grantForm.style.display = grantForm.style.display === 'none' ? 'flex' : 'none';
-      };
-      row.querySelector('.grant-confirm-btn').onclick = async ()=>{
-        const labId = labSelect.value;
-        const tier = row.querySelector('.grant-tier-select').value;
-        if(!labId){ showToast('No lab selected'); return; }
-        try{
-          allAdmins = await apiWrite('/.netlify/functions/admins', 'PATCH', {id:acc.id, grantClearance:{labId, tier}}, true);
-          renderAdminAccounts();
-          showToast('Clearance granted');
-        }catch(err){
-          handleAdminApiError(err);
-        }
-      };
-    }
 
     row.querySelector('.edit-admin-btn').onclick = ()=> startEditAdmin(acc);
     row.querySelector('.del-admin-btn').onclick = async ()=>{
@@ -3168,52 +3047,6 @@ document.getElementById('addAdminBtn').onclick = async ()=>{
     handleAdminApiError(err);
   }
 };
-
-// The audit log endpoint itself enforces the clearance gate server-side (see
-// inventory.mjs's `?auditLog=1` branch) - this just probes whether the
-// current admin gets a 200 back, and hides the nav entry entirely rather
-// than showing it disabled, so an uncleared admin doesn't even learn the
-// feature exists for this lab.
-async function refreshAuditLogAccess(){
-  const navBtn = document.getElementById('auditLogNavBtn');
-  try{
-    const res = await fetch(invUrl() + '&auditLog=1', { cache:'no-store', headers: authHeaders(true) });
-    if(res.ok){
-      navBtn.style.display = '';
-      renderAuditLog(await res.json());
-    } else {
-      navBtn.style.display = 'none';
-    }
-  }catch(e){
-    navBtn.style.display = 'none';
-  }
-}
-
-function renderAuditLog(entries){
-  const wrap = document.getElementById('auditLogList');
-  if(!entries || entries.length === 0){
-    wrap.innerHTML = '<div class="empty" style="padding:20px 0;">No classified-item activity recorded for this lab yet.</div>';
-    return;
-  }
-  const table = document.createElement('table');
-  table.innerHTML = '<thead><tr><th>When</th><th>Action</th><th>Item</th><th>Tier</th><th>By</th></tr></thead>';
-  const tbody = document.createElement('tbody');
-  entries.forEach(e=>{
-    const tr = document.createElement('tr');
-    const when = e.at ? new Date(e.at).toLocaleString() : '—';
-    tr.innerHTML = `
-      <td class="mono" style="font-size:12px;">${escapeAttr(when)}</td>
-      <td class="mono" style="text-transform:capitalize;">${escapeAttr(e.action||'')}</td>
-      <td>${escapeAttr(e.itemName || e.itemId || '')}</td>
-      <td><span class="badge" style="background:var(--red-bg); color:var(--red);">${e.tier === 'ultraBlack' ? 'Ultra Black' : 'Black'}</span></td>
-      <td class="mono">${escapeAttr(e.actor || 'unknown')}</td>
-    `;
-    tbody.appendChild(tr);
-  });
-  table.appendChild(tbody);
-  wrap.innerHTML = "";
-  wrap.appendChild(table);
-}
 
 function renderQR(){
   // Must always encode the token-based visitor URL, never whatever happens
@@ -3348,33 +3181,22 @@ function printAllLabels(){
   w.document.close();
 }
 
-// Serial number only makes sense for individually-tracked devices, not bulk
-// consumables - kept hidden for a "standard" item so the common case (adding
-// a box of gloves, say) doesn't have an irrelevant field sitting in the way.
-document.getElementById('newClassification').addEventListener('change', (e)=>{
-  const show = e.target.value !== 'standard';
-  document.getElementById('newSerialWrap').style.display = show ? 'block' : 'none';
-  if(!show) document.getElementById('newSerial').value = '';
-});
-
 document.getElementById('addItemBtn').onclick = async ()=>{
   const name = document.getElementById('newName').value.trim();
   const cat = document.getElementById('newCat').value.trim();
   const qty = parseInt(document.getElementById('newQty').value) || 0;
-  const classification = document.getElementById('newClassification').value;
+  const attribute = document.getElementById('newAttribute').value.trim();
   const serialNumber = document.getElementById('newSerial').value.trim();
   if(!name || qty<=0){ showToast('Enter a name and a positive quantity'); return; }
   try{
-    inventory = await apiWrite(invUrl(), 'POST', {name, category:cat, qty, classification, serialNumber}, true);
+    inventory = await apiWrite(invUrl(), 'POST', {name, category:cat, qty, attribute, serialNumber}, true);
     document.getElementById('newName').value='';
     document.getElementById('newCat').value='';
     document.getElementById('newQty').value='';
-    document.getElementById('newClassification').value='standard';
+    document.getElementById('newAttribute').value='';
     document.getElementById('newSerial').value='';
-    document.getElementById('newSerialWrap').style.display='none';
     renderAdmin();
-    if(classification !== 'standard') refreshAuditLogAccess();
-    showToast(classification !== 'standard' ? `Item added (${classification === 'ultraBlack' ? 'Ultra Black' : 'Black'})` : 'Item added');
+    showToast('Item added');
   }catch(e){
     handleAdminApiError(e);
   }
@@ -3611,9 +3433,9 @@ function startEditKit(kit){
   document.getElementById('kitNameInput').value = kit.name;
   // Resolve display names live from the currently loaded inventory - a kit
   // only ever stores {itemId, qty} (see kits.mjs), never a captured name.
-  // An item that's since been deleted (or reclassified out of this admin's
-  // clearance) is simply dropped here rather than shown with a blank name -
-  // saving the kit again afterward persists that drop server-side too.
+  // An item that's since been deleted is simply dropped here rather than
+  // shown with a blank name - saving the kit again afterward persists that
+  // drop server-side too.
   kitBuilderItems = kit.items
     .map(it=>{
       const item = inventory.find(i=>i.id===it.itemId);
@@ -4309,15 +4131,17 @@ function buildInvRow(item){
   const tr = document.createElement('tr');
   tr.innerHTML = `
     <td style="min-width:220px;">
-      ${item.classification && item.classification !== 'standard' ? `<span class="badge" style="background:var(--red-bg); color:var(--red); margin-bottom:4px; display:inline-block;">${item.classification === 'ultraBlack' ? 'Ultra Black' : 'Black'}</span>` : ''}
       <input type="text" value="${escapeAttr(item.name)}" class="nameEdit mono" style="width:100%;min-width:200px;margin-bottom:4px;">
-      ${(item.classification && item.classification !== 'standard') || item.serialNumber ? `
+      <div class="attribute-row">
+        <span class="attribute-label mono">${item.attribute ? escapeAttr(item.attribute) : 'no attribute'}</span>
+        <button class="attribute-edit-btn" type="button" title="Edit attribute (color, brand, SKU, etc.)">✎</button>
+        <input type="text" value="${escapeAttr(item.attribute||'')}" class="attributeEdit mono" placeholder="color / brand / SKU" style="display:none;">
+      </div>
       <div class="serial-row">
         <span class="serial-label mono">${item.serialNumber ? escapeAttr(item.serialNumber) : 'no serial number'}</span>
         <button class="serial-edit-btn" type="button" title="Edit serial number">✎</button>
         <input type="text" value="${escapeAttr(item.serialNumber||'')}" class="serialEdit mono" placeholder="serial number" style="display:none;">
       </div>
-      ` : ''}
       <div class="cat-row">
         <span class="cat-dot" style="background:${catCol.solid}"></span>
         <span class="cat-label mono" style="color:${catCol.solid}">${item.category ? escapeAttr(item.category) : 'no category'}</span>
@@ -4342,7 +4166,6 @@ function buildInvRow(item){
     try{
       inventory = await apiWrite(invUrl(), 'PUT', {id:item.id, [field]:value}, true);
       renderInvTable();
-      if(item.classification && item.classification !== 'standard') refreshAuditLogAccess();
       showToast(successMsg);
     }catch(err){
       handleAdminApiError(err);
@@ -4364,39 +4187,64 @@ function buildInvRow(item){
     if(!v){ showToast('Name cannot be empty'); renderInvTable(); return; }
     saveField('name', v, 'Name updated');
   });
+  // Same collapsed-label + pencil-toggle pattern for attribute and serial
+  // number - both are looked at rarely and edited even less often, so
+  // neither should compete for attention with an always-open input the way
+  // the name field does.
+  const attributeLabel = tr.querySelector('.attribute-label');
+  const attributeBtn = tr.querySelector('.attribute-edit-btn');
+  const attributeInput = tr.querySelector('.attributeEdit');
+  attributeBtn.onclick = ()=>{
+    const isEditing = attributeInput.style.display !== 'none';
+    if(isEditing){
+      attributeInput.style.display = 'none';
+      attributeLabel.style.display = 'inline';
+      attributeBtn.textContent = '✎';
+    } else {
+      attributeLabel.style.display = 'none';
+      attributeInput.style.display = 'inline-block';
+      attributeBtn.textContent = '✕';
+      attributeInput.focus();
+      attributeInput.select();
+    }
+  };
+  attributeInput.addEventListener('change', (e)=>{
+    saveField('attribute', e.target.value.trim(), 'Attribute updated');
+  });
+  attributeInput.addEventListener('keydown', (e)=>{
+    if(e.key === 'Escape'){
+      attributeInput.style.display = 'none';
+      attributeLabel.style.display = 'inline';
+      attributeBtn.textContent = '✎';
+    }
+  });
   const serialLabel = tr.querySelector('.serial-label');
   const serialBtn = tr.querySelector('.serial-edit-btn');
   const serialInput = tr.querySelector('.serialEdit');
-  if(serialInput){
-    // Same collapsed-label + pencil-toggle pattern as the category field
-    // right below it - a serial number is looked at rarely and edited even
-    // less often, so it shouldn't compete for attention with an
-    // always-open input the way the name field does.
-    serialBtn.onclick = ()=>{
-      const isEditing = serialInput.style.display !== 'none';
-      if(isEditing){
-        serialInput.style.display = 'none';
-        serialLabel.style.display = 'inline';
-        serialBtn.textContent = '✎';
-      } else {
-        serialLabel.style.display = 'none';
-        serialInput.style.display = 'inline-block';
-        serialBtn.textContent = '✕';
-        serialInput.focus();
-        serialInput.select();
-      }
-    };
-    serialInput.addEventListener('change', (e)=>{
-      saveField('serialNumber', e.target.value.trim(), 'Serial number updated');
-    });
-    serialInput.addEventListener('keydown', (e)=>{
-      if(e.key === 'Escape'){
-        serialInput.style.display = 'none';
-        serialLabel.style.display = 'inline';
-        serialBtn.textContent = '✎';
-      }
-    });
-  }
+  serialBtn.onclick = ()=>{
+    const isEditing = serialInput.style.display !== 'none';
+    if(isEditing){
+      serialInput.style.display = 'none';
+      serialLabel.style.display = 'inline';
+      serialBtn.textContent = '✎';
+    } else {
+      serialLabel.style.display = 'none';
+      serialInput.style.display = 'inline-block';
+      serialBtn.textContent = '✕';
+      serialInput.focus();
+      serialInput.select();
+    }
+  };
+  serialInput.addEventListener('change', (e)=>{
+    saveField('serialNumber', e.target.value.trim(), 'Serial number updated');
+  });
+  serialInput.addEventListener('keydown', (e)=>{
+    if(e.key === 'Escape'){
+      serialInput.style.display = 'none';
+      serialLabel.style.display = 'inline';
+      serialBtn.textContent = '✎';
+    }
+  });
   const catLabel = tr.querySelector('.cat-label');
   const catBtn = tr.querySelector('.cat-edit-btn');
   const catInput = tr.querySelector('.catEdit');
@@ -4439,7 +4287,6 @@ function buildInvRow(item){
     try{
       inventory = await apiWrite(invUrl(), 'DELETE', {id:item.id}, true);
       renderInvTable();
-      if(item.classification && item.classification !== 'standard') refreshAuditLogAccess();
     }catch(err){
       handleAdminApiError(err);
     }
@@ -4553,10 +4400,8 @@ function renderLog(){
 /* ---------- ADMIN: Missing Items bucket ---------- */
 // Deliberately not its own backend endpoint - every item flagged missing is
 // already sitting right inside the same `checkouts` array Checkout Log
-// already loaded (and which the server already filtered by classification
-// clearance for this admin - see checkouts.mjs's visibleCheckouts), so this
-// is purely a client-side derivation over data already in hand, same
-// pattern as the person-grouped log itself.
+// already loaded, so this is purely a client-side derivation over data
+// already in hand, same pattern as the person-grouped log itself.
 function renderMissingItems(){
   const tbody = document.querySelector('#missingTable tbody');
   tbody.innerHTML = "";
@@ -4956,9 +4801,6 @@ function buildBackfillForm(entry, opts){
 }
 
 // Turns one history entry (see checkouts.mjs) into a human-readable line.
-// `items`, when present, already went through the same classification
-// filter as the checkout's top-level items array server-side - nothing
-// extra to hide here.
 function describeHistoryEntry(e){
   const itemsPart = Array.isArray(e.items) && e.items.length
     ? ': ' + e.items.map(it=> `${escapeAttr(it.name)} ×${it.qty}`).join(', ')

@@ -47,13 +47,8 @@ const multimeter = r.data.find((i) => i.name === "Multimeter");
 r = await call(inventoryMod, "POST", "/inventory?lab=" + labTwoId, { headers: { "x-admin-token": lab2Token }, body: { name: "Cable Tester", qty: 4, category: "Tools" } });
 const cableTester = r.data.find((i) => i.name === "Cable Tester");
 
-// classified item at groomlake, for the "sanitized like a shopper" check
-await call(adminsMod, "PATCH", "/admins", {
-  headers: { "x-admin-token": rootToken },
-  body: { id: (await call(adminsMod, "GET", "/admins", { headers: { "x-admin-token": rootToken } })).data.find((a) => a.username === "lab1admin").id, grantClearance: { labId: "groomlake", tier: "black" } },
-});
-r = await call(inventoryMod, "POST", "/inventory?lab=groomlake", { headers: { "x-admin-token": lab1Token }, body: { name: "Secret Widget", qty: 5, classification: "black", serialNumber: "SN-42" } });
-const secretWidget = r.data.find((i) => i.name === "Secret Widget");
+// an item carrying both an attribute and a serial number, to check the allowlist keeps one and drops the other
+await call(inventoryMod, "POST", "/inventory?lab=groomlake", { headers: { "x-admin-token": lab1Token }, body: { name: "Secret Widget", qty: 5, attribute: "Red", serialNumber: "SN-42" } });
 
 // === Admin Accounts: creating/editing a client DRI account ===
 
@@ -103,9 +98,9 @@ assert(
 assert(catalogMultimeter.qty === 10 && catalogMultimeter.available === 10 && catalogMultimeter.category === "Tools", "the fields a client IS allowed - name/category/qty/available - are still present and correct");
 
 const catalogSecret = catalog.find((i) => i.name === "Secret Widget");
-assert(!!catalogSecret, "a classified item still appears in a client's catalog - not hidden outright, per the 'visible like a shopper sees it' decision");
-assert(catalogSecret.restricted === true, "the classified item is flagged restricted, same treatment an anonymous shopper gets");
-assert(!("classification" in catalogSecret) && !("serialNumber" in catalogSecret), "a client never learns the actual tier or serial number of a classified item, same as a shopper");
+assert(!!catalogSecret, "the item shows up in a client's catalog");
+assert(catalogSecret.attribute === "Red", "the utilitarian attribute field IS in the client allowlist - useful for telling similar items apart");
+assert(!("serialNumber" in catalogSecret), "a client never learns an item's serial number - stays admin-only");
 
 r = await call(labsMod, "GET", "/labs?directory=1", { headers: { "x-admin-token": driBToken } });
 assert(r.status === 200 && r.data.length === 0, "a client has no admin authority over any lab, so the cross-company lab-name directory (normally visible to any labadmin, e.g. to pick a transfer counterparty) hands back nothing for a client");

@@ -1,4 +1,4 @@
-import { resolveAdmin, canAccessLab, hasClearance } from "./lib/auth.mjs";
+import { resolveAdmin, canAccessLab } from "./lib/auth.mjs";
 import { labStore } from "./lib/stores.mjs";
 import { resolveLab } from "./lib/lab-registry.mjs";
 import { updateJSON, ConcurrentWriteError } from "./lib/occ.mjs";
@@ -63,62 +63,6 @@ function visitorAccessOk(req, lab, admin, labId) {
   return req.headers.get("x-lab-passcode") === lab.entryPasscode;
 }
 
-// A checkout record's line items reference inventory items by id, and
-// currently carry that item's *name* directly on the record too (so the
-// checkout log still reads sensibly even after an item is later renamed or
-// deleted). For an authenticated ADMIN who isn't individually cleared for a
-// classified item's tier, that name is filtered here the same way
-// inventory.mjs filters the inventory list itself - the internal
-// need-to-know model among staff is unchanged. For an anonymous/shopper
-// caller (admin === null), classified line items are now included the same
-// as standard ones - restricted devices are checkout-visible to shoppers
-// (see inventory.mjs's sanitizeForCheckout), and the frontend needs this
-// endpoint's data to correctly compute how much of one is still available
-// (see reindexCheckouts() client-side). A record left with zero visible
-// items (every line filtered out for an uncleared admin) is dropped
-// entirely, so its mere existence doesn't leak to staff who shouldn't know
-// about it either.
-function itemVisible(itemId, classById, admin, labId) {
-  const tier = classById.get(itemId) || "standard";
-  if (tier === "standard") return true;
-  if (!admin) return true;
-  return hasClearance(admin, labId, tier);
-}
-
-// The history trail (see the POST/PATCH branches below) carries the same
-// kind of item references the top-level `items` array does - so it needs
-// the exact same per-item confidentiality filter, not just the checkout
-// record as a whole. Without this, an uncleared admin could still learn
-// that a classified item existed and when it was returned just by opening
-// a checkout's history, even with the top-level `items` array itself
-// correctly filtered. A history entry that references specific items
-// (returned/self-returned) is dropped entirely if none of its items remain
-// visible; a record-level entry with no item references (checked-out,
-// items-updated) is always kept, since its visibility already rides on the
-// record surviving the `items.length > 0` filter below.
-function filterHistory(history, classById, admin, labId) {
-  if (!Array.isArray(history)) return [];
-  return history
-    .map((entry) => {
-      if (!Array.isArray(entry.items)) return entry;
-      const items = entry.items.filter((it) => itemVisible(it.itemId, classById, admin, labId));
-      return { ...entry, items };
-    })
-    .filter((entry) => !Array.isArray(entry.items) || entry.items.length > 0);
-}
-
-async function visibleCheckouts(list, admin, labId, store) {
-  const inventory = (await store.get("inventory", { type: "json" })) || [];
-  const classById = new Map(inventory.map((i) => [i.id, i.classification || "standard"]));
-  return list
-    .map((c) => {
-      const items = c.items.filter((it) => itemVisible(it.itemId, classById, admin, labId));
-      const history = filterHistory(c.history, classById, admin, labId);
-      return { ...c, items, history };
-    })
-    .filter((c) => c.items.length > 0);
-}
-
 // Best-effort "attach the send result to the record" patch. This runs
 // *after* the authoritative write already succeeded, purely to annotate
 // the record for the admin UI - if it loses a rare race, the checkout data
@@ -157,7 +101,7 @@ export default withErrorBoundary(async (req) => {
 
   if (method === "GET") {
     const checkouts = (await store.get("checkouts", { type: "json" })) || [];
-    return json(await visibleCheckouts(checkouts, requester, labId, store));
+    return json(checkouts);
   }
 
   if (method === "POST") {
@@ -201,13 +145,10 @@ export default withErrorBoundary(async (req) => {
       assignedByAdmin: isAdminForLab,
       labName: body.labName || "",
       items,
-      // The full event trail for this checkout - see visibleCheckouts()
-      // above for why item references in here get the same
-      // classification-based filtering as the top-level `items` array does.
-      // This is what actually answers "when was this checked out" once a
-      // checkout's current status has moved on to "returned" - the
-      // top-level `createdAt` never changes, but it's easy to lose track of
-      // once the badge just says "returned".
+      // The full event trail for this checkout - what actually answers
+      // "when was this checked out" once a checkout's current status has
+      // moved on to "returned" - the top-level `createdAt` never changes,
+      // but it's easy to lose track of once the badge just says "returned".
       history: [
         {
           at: createdAt,
@@ -222,36 +163,6 @@ export default withErrorBoundary(async (req) => {
       updateJSON(store, "checkouts", async (current) => {
         const checkouts = current || [];
 
-        // Checking a classified item OUT requires either admin clearance for
-        // its tier, or the lab's current release passcode - the "yes, you
-        // can take this restricted device" step. Unlike inventory.mjs's
-        // *visibility* rule (classified items are now shown to any
-        // shopper), this is the actual authorization gate for walking out
-        // with one, and it applies to *everyone*, admins included: an
-        // uncleared superadmin needs the code exactly like a shopper does.
-        // Checked fresh every retry attempt in case clearance or the code
-        // changes mid-flight. No "item not found" masking here (unlike
-        // inventory.mjs's PUT/DELETE) - the item's existence is no longer a
-        // secret from this caller, since they could already see it in the
-        // grid; the error just explains what's still missing.
-        const inventoryForClearance = (await store.get("inventory", { type: "json" })) || [];
-        const releaseCodeOk =
-          !!lab.classifiedReleaseCode &&
-          typeof body.releaseCode === "string" &&
-          body.releaseCode === lab.classifiedReleaseCode;
-        for (const reqItem of record.items) {
-          const invItem = inventoryForClearance.find((i) => i.id === reqItem.itemId);
-          const tier = invItem ? invItem.classification || "standard" : "standard";
-          if (tier !== "standard" && !hasClearance(requester, labId, tier) && !releaseCodeOk) {
-            throw new ApiError(
-              lab.classifiedReleaseCode
-                ? "a valid release passcode is required to check out a restricted item"
-                : "this lab hasn't set a release passcode yet - ask an admin to set one before checking out a restricted item",
-              403
-            );
-          }
-        }
-
         // The client only ever saw a snapshot of "available" stock from
         // whenever it last loaded the page - by the time this request
         // lands, someone else may have taken the last one. This check runs
@@ -262,7 +173,7 @@ export default withErrorBoundary(async (req) => {
         // logging historical/backdated checkouts), matching the existing
         // backdating privilege above.
         if (!isAdminForLab) {
-          const inventory = inventoryForClearance;
+          const inventory = (await store.get("inventory", { type: "json" })) || [];
           for (const reqItem of record.items) {
             const invItem = inventory.find((i) => i.id === reqItem.itemId);
             const available = invItem ? availableQty(invItem, checkouts) : 0;
@@ -335,7 +246,7 @@ export default withErrorBoundary(async (req) => {
       );
       if (errorResponse) return errorResponse;
       await checkLowStockAndNotify(labId, labName, store); // returning may clear a low-stock flag
-      return json(await visibleCheckouts(value, requester, labId, store));
+      return json(value);
     }
 
     if (action === "backfillReturnDate") {
@@ -399,7 +310,7 @@ export default withErrorBoundary(async (req) => {
         })
       );
       if (errorResponse) return errorResponse;
-      return json(await visibleCheckouts(value, requester, labId, store));
+      return json(value);
     }
 
     // every other action requires an admin scoped to this lab.
@@ -451,7 +362,7 @@ export default withErrorBoundary(async (req) => {
         })
       );
       if (errorResponse) return errorResponse;
-      return json(await visibleCheckouts(value, requester, labId, store));
+      return json(value);
     }
 
     if (action === "resolveMissing") {
@@ -536,7 +447,7 @@ export default withErrorBoundary(async (req) => {
       }
 
       await checkLowStockAndNotify(labId, labName, store);
-      return json(await visibleCheckouts(value, requester, labId, store));
+      return json(value);
     }
 
     if (action === "resendEmail") {
@@ -566,7 +477,7 @@ export default withErrorBoundary(async (req) => {
         })
       );
       if (errorResponse) return errorResponse;
-      return json({ checkouts: await visibleCheckouts(value, requester, labId, store), email_notification: emailResult });
+      return json({ checkouts: value, email_notification: emailResult });
     }
 
     if (action === "updateItems") {
@@ -587,9 +498,7 @@ export default withErrorBoundary(async (req) => {
             items: newItems,
             // Record-level event, not tied to specific item ids - the new
             // item list itself is exactly what's already shown in the
-            // (now-current) `items` array, so there's no separate
-            // clearance-filtering need for this entry the way there is for
-            // returned/self-returned entries above.
+            // (now-current) `items` array.
             history: [
               ...(record.history || []),
               { at: new Date().toISOString(), action: "items-updated", by: actor },
@@ -612,7 +521,7 @@ export default withErrorBoundary(async (req) => {
 
       await checkLowStockAndNotify(labId, labName, store);
       return json({
-        checkouts: await visibleCheckouts(finalList || value, requester, labId, store),
+        checkouts: finalList || value,
         email_notification: emailResult,
       });
     }
@@ -650,7 +559,7 @@ export default withErrorBoundary(async (req) => {
     );
     if (errorResponse) return errorResponse;
     await checkLowStockAndNotify(labId, labName, store);
-    return json(await visibleCheckouts(value, requester, labId, store));
+    return json(value);
   }
 
   return json({ error: "method not allowed" }, 405);
