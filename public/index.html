@@ -1511,7 +1511,15 @@ function openPasswordModal({ mode, token }){
 function showChangePasswordModal(){ return openPasswordModal({ mode: 'change' }); }
 function showSetNewPasswordModal(token){ return openPasswordModal({ mode: 'reset', token }); }
 
+// True only when the most recent ensureAdminUnlocked() call actually made
+// someone type a password (showLoginModal) - never for an already-live
+// session or a silent saved-token resume. enterAdminView() reads this right
+// after to decide whether to default into Admin Accounts (a genuinely fresh
+// sign-in) or restore whichever sidebar section was last open (resuming an
+// existing session, e.g. after a page refresh).
+let lastSignInWasFresh = false;
 async function ensureAdminUnlocked(){
+  lastSignInWasFresh = false;
   if(adminUser) return true;
   const savedToken = localStorage.getItem('adminToken');
   if(savedToken){
@@ -1524,7 +1532,9 @@ async function ensureAdminUnlocked(){
     }
     localStorage.removeItem('adminToken');
   }
-  return await showLoginModal();
+  const ok = await showLoginModal();
+  if(ok) lastSignInWasFresh = true;
+  return ok;
 }
 
 // Coalesces bursts of calls (e.g. every keystroke in a search box) into one
@@ -2686,6 +2696,10 @@ function showAdminSection(key){
   document.querySelectorAll('.admin-nav-btn').forEach(btn=>{
     btn.classList.toggle('active', btn.dataset.target === key);
   });
+  // Remembered so enterAdminView() can restore this exact tab on a plain
+  // page refresh instead of always resetting to the Admin Accounts default
+  // - see lastSignInWasFresh.
+  localStorage.setItem('lastAdminSection', key);
 }
 document.querySelectorAll('.admin-nav-btn').forEach(btn=>{
   btn.onclick = ()=> showAdminSection(btn.dataset.target);
@@ -2784,11 +2798,20 @@ async function enterAdminView(sectionToShow, preferredLabId){
   renderAdminLabList();
   renderQR();
   renderAdmin();
-  // Default landing section: Admin Accounts for a superadmin (the section
-  // they land on most often to manage vendor/lab access), falling back to
-  // Inventory for a lab-admin, who can't see the Admin Accounts section at
-  // all (its nav button is hidden for them just above).
-  showAdminSection(sectionToShow || (isSuper ? 'adminAccounts' : 'inventory'));
+  // Landing section: an explicit request (e.g. "switch lab" jumping to
+  // Labs) always wins. Otherwise, resuming an already-signed-in session -
+  // a page refresh, or clicking the Admin toggle again mid-visit - goes
+  // back to whichever sidebar tab was actually open (see showAdminSection),
+  // same as reloading any other normal site. Only a genuinely fresh sign-in
+  // (lastSignInWasFresh - just typed a password) defaults into Admin
+  // Accounts for a superadmin, or Inventory for a lab-admin who can't even
+  // see Admin Accounts (its nav button is hidden for them just above).
+  const defaultSection = isSuper ? 'adminAccounts' : 'inventory';
+  const savedSection = localStorage.getItem('lastAdminSection');
+  const savedSectionBtn = savedSection && document.querySelector(`.admin-nav-btn[data-target="${savedSection}"]`);
+  const savedSectionAvailable = savedSectionBtn && savedSectionBtn.style.display !== 'none';
+  const restoredSection = !lastSignInWasFresh && savedSectionAvailable ? savedSection : defaultSection;
+  showAdminSection(sectionToShow || restoredSection);
 }
 document.getElementById('adminToggle').onclick = ()=> enterAdminView();
 document.getElementById('noLabAdminBtn').onclick = ()=> enterAdminView();
