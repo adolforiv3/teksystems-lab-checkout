@@ -1,6 +1,6 @@
-import { resolveAdmin, canAccessLab, isSuperadmin, isClient } from "./lib/auth.mjs";
+import { resolveAdmin, canAccessLab, isClient } from "./lib/auth.mjs";
 import { labStore, labRegistryStore } from "./lib/stores.mjs";
-import { resolveLab, loadLabsForRead, labsVisibleTo } from "./lib/lab-registry.mjs";
+import { resolveLab, loadLabsForRead } from "./lib/lab-registry.mjs";
 import { updateJSON, ConcurrentWriteError } from "./lib/occ.mjs";
 import { checkLowStockAndNotify, availableQty } from "./lib/lowstock.mjs";
 import { computePendingHolds, claimableQty } from "./lib/holds.mjs";
@@ -159,19 +159,25 @@ export default withErrorBoundary(async (req) => {
     return json(rows);
   }
 
-  // Company-wide inventory: every item across every lab a superadmin can
-  // see, in one list, each tagged with which lab it belongs to. Its own
-  // branch rather than something reachable via `?lab=` - it isn't scoped to
-  // a single lab's access-token model at all, so it needs a superadmin
-  // session outright rather than a lab passcode or access token standing in
-  // for one. This fans out one read per visible lab, which is fine for an
-  // admin-only, low-frequency view but would not be the right pattern for
-  // anything on the shopper-facing path.
+  // Company-wide inventory: every item across every lab, in one list, each
+  // tagged with which lab it belongs to - read-only visibility for any
+  // staff account (superadmin or lab-admin), not just the labs a lab-admin
+  // is actually assigned to manage. There's nothing confidential left in an
+  // item's shape to protect between labs (see the removal of the old
+  // Black/Ultra Black classification system), and letting a lab-admin see
+  // what other labs actually have on hand is what makes filing a targeted
+  // transfer request possible instead of guessing by name alone. This is
+  // visibility only - every write endpoint below still gates on
+  // canAccessLab(admin, labId), so a lab-admin still can't edit, add to, or
+  // remove from any lab they aren't assigned to. Its own branch rather than
+  // something reachable via `?lab=` since it isn't scoped to a single lab's
+  // access-token model at all - it needs a real staff session outright
+  // rather than a lab passcode or access token standing in for one. Fans
+  // out one read per lab, which is fine for a low-frequency admin view but
+  // would not be the right pattern for anything on the shopper-facing path.
   if (method === "GET" && url.searchParams.get("all") === "1") {
-    if (!isSuperadmin(admin)) {
-      return json({ error: admin ? "superadmin access required" : "unauthorized" }, admin ? 403 : 401);
-    }
-    const labs = labsVisibleTo(await loadLabsForRead(labRegistryStore()), admin);
+    if (!admin) return json({ error: "unauthorized" }, 401);
+    const labs = await loadLabsForRead(labRegistryStore());
     const rows = (
       await Promise.all(
         labs.map(async (lab) => {

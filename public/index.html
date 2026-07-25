@@ -1888,7 +1888,7 @@ setInterval(async ()=>{
       transfers = freshTransfers;
       sourceRequests = freshRequests;
       renderAdmin();
-      if(adminUser && adminUser.role === 'superadmin' && document.querySelector('.admin-section.active')?.dataset.adminSection === 'companyInventory'){
+      if(adminUser && document.querySelector('.admin-section.active')?.dataset.adminSection === 'companyInventory'){
         companyInventory = await fetchCompanyInventorySafe();
         renderCompanyInventory();
       }
@@ -2753,12 +2753,20 @@ async function enterAdminView(sectionToShow, preferredLabId){
   document.getElementById('adminBrandTitle').textContent = (currentLab.name || 'Lab') + ' — Lab Inventory & Checkout Log';
 
   const isSuper = adminUser && adminUser.role === 'superadmin';
+  // Admin Accounts (creating/editing accounts, granting lab access) stays
+  // superadmin-only - that's account/permission management, not inventory
+  // visibility. Company Inventory is now for any signed-in staff account:
+  // read-only visibility into every lab's real stock (not just the ones
+  // this admin manages) so a lab-admin can see what to actually request via
+  // a transfer instead of guessing by name - see inventory.mjs's `?all=1`
+  // branch. Writing still only ever works on a lab this admin is assigned
+  // to, enforced server-side regardless of what this view shows.
   document.querySelector('.admin-nav-btn[data-target="adminAccounts"]').style.display = isSuper ? '' : 'none';
-  document.getElementById('companyInvNavBtn').style.display = isSuper ? '' : 'none';
-  // The "Organization" group label itself is only meaningful when at least
-  // one of its buttons is showing - a lab-admin should never see a bold
-  // section header sitting above nothing.
-  document.getElementById('orgNavGroupLabel').style.display = isSuper ? '' : 'none';
+  document.getElementById('companyInvNavBtn').style.display = '';
+  // The "Organization" group label is meaningful as long as at least one of
+  // its buttons is showing - Company Inventory always is now, so this only
+  // ever hides for a client (never signed into this view) or no session.
+  document.getElementById('orgNavGroupLabel').style.display = adminUser ? '' : 'none';
 
   // Every one of these is an independent read (this lab's own inventory
   // bundle, plus every company-wide list an admin's own panel needs) -
@@ -2769,7 +2777,7 @@ async function enterAdminView(sectionToShow, preferredLabId){
   const [, fetchedAdmins, fetchedCompanyInv, fetchedTransfers, fetchedRequests, fetchedDirectory] = await Promise.all([
     target ? loadData() : Promise.resolve(),
     isSuper ? fetchAdminsSafe() : Promise.resolve(allAdmins),
-    isSuper ? fetchCompanyInventorySafe() : Promise.resolve(companyInventory),
+    fetchCompanyInventorySafe(),
     fetchTransfersSafe(),
     fetchSourceRequestsSafe(),
     fetchLabDirectorySafe(),
@@ -2778,9 +2786,9 @@ async function enterAdminView(sectionToShow, preferredLabId){
     allAdmins = fetchedAdmins;
     cancelEditAdmin();
     renderAdminAccounts();
-    companyInventory = fetchedCompanyInv;
-    renderCompanyInventory();
   }
+  companyInventory = fetchedCompanyInv;
+  renderCompanyInventory();
   // Transfers/source requests are for any lab admin, not just superadmins -
   // fetched once per admin-view entry (both are global/company-wide, not
   // tied to whichever lab happens to be currentLab) rather than on every
@@ -3274,9 +3282,22 @@ async function fetchCompanyInventorySafe(){
   catch(e){ console.error('fetchCompanyInventorySafe failed', e); return []; }
 }
 
+// Company Inventory is now read-only visibility across every lab, for any
+// signed-in staff account (see inventory.mjs's `?all=1` branch) - but
+// actually managing a lab's stock still only ever works for a lab this
+// admin is assigned to (superadmin, or in adminUser.labs[]). Rather than
+// show a "Manage" button that just fails with a toast for every other
+// lab's rows, only render it where it would actually work - anything else
+// gets a plain "view only" note instead.
+function canManageLab(labId){
+  if(!adminUser) return false;
+  if(adminUser.role === 'superadmin') return true;
+  return (adminUser.labs || []).includes(labId);
+}
 function buildCompanyInvRow(row){
   const catCol = categoryColor(row.category);
   const checkedOut = Math.max(0, (row.qty||0) - (row.available||0));
+  const manageable = canManageLab(row.labId);
   const tr = document.createElement('tr');
   tr.innerHTML = `
     <td style="min-width:200px;">
@@ -3290,14 +3311,18 @@ function buildCompanyInvRow(row){
     <td class="mono num-cell">${row.qty}</td>
     <td class="mono num-cell">${checkedOut}</td>
     <td class="mono num-cell">${row.available}</td>
-    <td><button class="btn btn-ghost manage-lab-btn" type="button">Manage →</button></td>
+    <td>${manageable
+      ? `<button class="btn btn-ghost manage-lab-btn" type="button">Manage →</button>`
+      : `<span class="small-note" title="You're not assigned to this lab - browse only. File a transfer request to get items moved to a lab you manage.">view only</span>`}</td>
   `;
-  tr.querySelector('.manage-lab-btn').onclick = async ()=>{
-    const lab = allLabs.find(l=>l.id===row.labId);
-    if(!lab){ showToast('That lab is no longer available'); return; }
-    await switchAdminToLab(lab);
-    showAdminSection('inventory');
-  };
+  if(manageable){
+    tr.querySelector('.manage-lab-btn').onclick = async ()=>{
+      const lab = allLabs.find(l=>l.id===row.labId);
+      if(!lab){ showToast('That lab is no longer available'); return; }
+      await switchAdminToLab(lab);
+      showAdminSection('inventory');
+    };
+  }
   return tr;
 }
 
