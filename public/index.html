@@ -963,6 +963,7 @@
           </div>
 
           <div id="transferSendBuilder">
+            <input type="text" id="transferSendItemSearch" class="mono" placeholder="search items, categories, attributes, serial #…" style="width:100%;margin-bottom:8px;">
             <div class="admin-grid-form" style="grid-template-columns:2fr 1fr auto;">
               <select id="transferSendItemSelect" class="mono"></select>
               <input type="number" id="transferSendQty" min="1" value="1" class="mono" placeholder="Qty">
@@ -4123,6 +4124,12 @@ function renderTransferOtherLabSelect(){
   if(prev && others.some(l=>l.id===prev)) sel.value = prev;
 }
 
+// Same shared search engine as every other item search box in the app
+// (name/category/attribute/serial #, multi-word AND, synonyms, typo-
+// tolerant) - a lab's inventory can run to hundreds of items, and a plain
+// <select> with no way to narrow it down means scrolling past everything
+// else just to find one thing to send.
+let transferSendSearchTerm = "";
 function renderTransferSendItemSelect(){
   const sel = document.getElementById('transferSendItemSelect');
   const prev = sel.value;
@@ -4131,7 +4138,14 @@ function renderTransferSendItemSelect(){
     sel.innerHTML = '<option value="">No inventory yet</option>';
     return;
   }
-  inventory.forEach(item=>{
+  const visible = transferSendSearchTerm
+    ? inventory.filter(i=> looseSearchMatch(itemSearchText(i), transferSendSearchTerm))
+    : inventory;
+  if(visible.length === 0){
+    sel.innerHTML = '<option value="">No items match that search</option>';
+    return;
+  }
+  visible.forEach(item=>{
     const avail = availableQty(item);
     const opt = document.createElement('option');
     opt.value = item.id;
@@ -4139,8 +4153,12 @@ function renderTransferSendItemSelect(){
     if(avail === 0) opt.disabled = true;
     sel.appendChild(opt);
   });
-  if(prev && inventory.some(i=>i.id===prev)) sel.value = prev;
+  if(prev && visible.some(i=>i.id===prev)) sel.value = prev;
 }
+document.getElementById('transferSendItemSearch').addEventListener('input', debounce((e)=>{
+  transferSendSearchTerm = e.target.value.trim();
+  renderTransferSendItemSelect();
+}, 150));
 
 function renderTransferSendLines(){
   const wrap = document.getElementById('transferSendLines');
