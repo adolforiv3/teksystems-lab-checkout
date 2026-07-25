@@ -1552,6 +1552,18 @@ function escapeAttr(str){
   return String(str ?? '').replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 }
 
+// Item name alone isn't unique - two rows can share a name but differ by
+// attribute (color/brand/SKU) or serial number (see Add Item's fields), and
+// a plain <select> option has no room for the richer per-item detail an
+// item card shows. Every item picker (Assign Supplies, New Transfer,
+// editing a checkout's items) folds attribute/serial in whenever they're
+// set, so "which one" is answerable without leaving the dropdown - a name
+// with nothing else set still just reads as the name, unchanged.
+function itemOptionLabel(item, avail){
+  const details = [item.attribute, item.serialNumber ? `SN ${item.serialNumber}` : ''].filter(Boolean).join(' · ');
+  return `${item.name}${details ? ' — ' + details : ''} (${avail} available)`;
+}
+
 /* ---- category colors: deterministic so the same category name always
    gets the same color, no manual assignment needed ---- */
 function hexToRgb(hex){
@@ -3732,7 +3744,7 @@ function renderAssignItemOptions(){
     const avail = availableQty(item);
     const opt = document.createElement('option');
     opt.value = item.id;
-    opt.textContent = `${item.name} (${avail} available)`;
+    opt.textContent = itemOptionLabel(item, avail);
     if(avail === 0) opt.disabled = true;
     sel.appendChild(opt);
   });
@@ -4123,7 +4135,7 @@ function renderTransferSendItemSelect(){
     const avail = availableQty(item);
     const opt = document.createElement('option');
     opt.value = item.id;
-    opt.textContent = `${item.name} (${avail} available)`;
+    opt.textContent = itemOptionLabel(item, avail);
     if(avail === 0) opt.disabled = true;
     sel.appendChild(opt);
   });
@@ -5725,7 +5737,7 @@ function toggleEditItemsRow(checkoutRow, c){
       const avail = availForEdit(item.id);
       const opt = document.createElement('option');
       opt.value = item.id;
-      opt.textContent = `${item.name} (${avail} available)`;
+      opt.textContent = itemOptionLabel(item, avail);
       if(avail<=0) opt.disabled = true;
       sel.appendChild(opt);
     });
