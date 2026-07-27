@@ -1581,6 +1581,27 @@ function itemOptionLabel(item, avail){
   return `${item.name}${details ? ' — ' + details : ''} (${avail} available)`;
 }
 
+// Groups a picker's items into <optgroup>s by category (alphabetical,
+// "Uncategorized" for anything without one) so a long inventory list reads
+// as sections instead of one flat alphabetless block - every item picker
+// in the app (Kit Builder, Assign Supplies, New Transfer, editing a
+// checkout's items) uses this so browsing feels the same everywhere.
+function appendGroupedOptions(sel, items, makeOption){
+  const byCategory = new Map();
+  items.forEach(item=>{
+    const cat = item.category || 'Uncategorized';
+    if(!byCategory.has(cat)) byCategory.set(cat, []);
+    byCategory.get(cat).push(item);
+  });
+  const cats = [...byCategory.keys()].sort((a,b)=>a.localeCompare(b, undefined, {sensitivity:'base'}));
+  cats.forEach(cat=>{
+    const group = document.createElement('optgroup');
+    group.label = cat;
+    byCategory.get(cat).forEach(item=> group.appendChild(makeOption(item)));
+    sel.appendChild(group);
+  });
+}
+
 /* ---- category colors: deterministic so the same category name always
    gets the same color, no manual assignment needed ---- */
 function hexToRgb(hex){
@@ -3823,13 +3844,13 @@ function renderAssignItemOptions(){
     sel.innerHTML = '<option value="">No inventory yet</option>';
     return;
   }
-  inventory.forEach(item=>{
+  appendGroupedOptions(sel, inventory, item=>{
     const avail = availableQty(item);
     const opt = document.createElement('option');
     opt.value = item.id;
     opt.textContent = itemOptionLabel(item, avail);
     if(avail === 0) opt.disabled = true;
-    sel.appendChild(opt);
+    return opt;
   });
   if(prev && inventory.some(i=>i.id===prev)) sel.value = prev;
 }
@@ -3987,7 +4008,7 @@ function renderKitItemSelect(){
     sel.innerHTML = '<option value="">No inventory yet</option>';
     return;
   }
-  inventory.forEach(item=>{
+  appendGroupedOptions(sel, inventory, item=>{
     const opt = document.createElement('option');
     opt.value = item.id;
     // Attribute/serial number, when set, so two rows sharing a name (a
@@ -3996,7 +4017,7 @@ function renderKitItemSelect(){
     // picker in the app already shows (see itemOptionLabel).
     const details = [item.attribute, item.serialNumber ? `SN ${item.serialNumber}` : ''].filter(Boolean).join(' · ');
     opt.textContent = `${item.name}${details ? ' — ' + details : ''} (${item.qty} on hand)`;
-    sel.appendChild(opt);
+    return opt;
   });
   if(prev && inventory.some(i=>i.id===prev)) sel.value = prev;
 }
@@ -4249,19 +4270,25 @@ function renderTransferReqItemSelect(){
   const sel = document.getElementById('transferReqItemSelect');
   const otherLabId = document.getElementById('transferOtherLab').value;
   const prev = sel.value;
-  const customOption = `<option value="${TRANSFER_REQ_CUSTOM_VALUE}">+ Something else (type a name)…</option>`;
+  sel.innerHTML = "";
+  const customOpt = document.createElement('option');
+  customOpt.value = TRANSFER_REQ_CUSTOM_VALUE;
+  customOpt.textContent = '+ Something else (type a name)…';
   if(!otherLabId){
-    sel.innerHTML = customOption;
+    sel.appendChild(customOpt);
   } else {
     const theirItems = companyInventory.filter(r=> r.labId === otherLabId);
     const visible = transferReqSearchTerm
       ? theirItems.filter(i=> looseSearchMatch(itemSearchText(i), transferReqSearchTerm))
       : theirItems;
-    const itemOptions = visible.map(item=>{
-      const disabled = item.available === 0 ? ' disabled' : '';
-      return `<option value="${escapeAttr(item.id)}"${disabled}>${escapeAttr(itemOptionLabel(item, item.available))}</option>`;
-    }).join('');
-    sel.innerHTML = (visible.length ? itemOptions : '') + customOption;
+    appendGroupedOptions(sel, visible, item=>{
+      const opt = document.createElement('option');
+      opt.value = item.id;
+      opt.textContent = itemOptionLabel(item, item.available);
+      if(item.available === 0) opt.disabled = true;
+      return opt;
+    });
+    sel.appendChild(customOpt);
     if(prev && (visible.some(i=>i.id===prev) || prev===TRANSFER_REQ_CUSTOM_VALUE)) sel.value = prev;
   }
   updateTransferReqCustomVisibility();
@@ -4310,13 +4337,13 @@ function renderTransferSendItemSelect(){
     sel.innerHTML = '<option value="">No items match that search</option>';
     return;
   }
-  visible.forEach(item=>{
+  appendGroupedOptions(sel, visible, item=>{
     const avail = availableQty(item);
     const opt = document.createElement('option');
     opt.value = item.id;
     opt.textContent = itemOptionLabel(item, avail);
     if(avail === 0) opt.disabled = true;
-    sel.appendChild(opt);
+    return opt;
   });
   if(prev && visible.some(i=>i.id===prev)) sel.value = prev;
 }
@@ -4474,9 +4501,13 @@ function buildFulfillmentForm(t, sourceInventory){
 
     const sel = document.createElement('select');
     sel.className = 'mono';
-    sel.innerHTML = '<option value="">— skip —</option>' + sourceInventory.map(i=>
-      `<option value="${escapeAttr(i.id)}">${escapeAttr(i.name)} (${i.qty} on hand)</option>`
-    ).join('');
+    sel.innerHTML = '<option value="">— skip —</option>';
+    appendGroupedOptions(sel, sourceInventory, item=>{
+      const opt = document.createElement('option');
+      opt.value = item.id;
+      opt.textContent = `${item.name} (${item.qty} on hand)`;
+      return opt;
+    });
     const guess = sourceInventory.find(i=>i.name.toLowerCase() === reqIt.name.toLowerCase());
     if(guess) sel.value = guess.id;
 
@@ -5950,13 +5981,13 @@ function toggleEditItemsRow(checkoutRow, c){
       sel.innerHTML = '<option value="">No inventory yet</option>';
       return;
     }
-    inventory.forEach(item=>{
+    appendGroupedOptions(sel, inventory, item=>{
       const avail = availForEdit(item.id);
       const opt = document.createElement('option');
       opt.value = item.id;
       opt.textContent = itemOptionLabel(item, avail);
       if(avail<=0) opt.disabled = true;
-      sel.appendChild(opt);
+      return opt;
     });
   }
 
