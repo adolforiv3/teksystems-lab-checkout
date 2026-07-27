@@ -2165,7 +2165,16 @@ function addToCart(item, qty){
   const existing = cart.find(c=>c.itemId===item.id);
   const avail = availableQty(item);
   if(existing){
-    existing.qty = Math.min(avail, existing.qty + qty);
+    // The server's `available` already excludes this cart's OWN hold on
+    // this item (see cart-holds.mjs / lib/holds.mjs - a shopper's own
+    // reservation counts against them everywhere except the actual
+    // checkout commit, on purpose, so the number always means "how many
+    // MORE could I still add"). Adding the existing line's qty back is
+    // what makes "how many more" answerable correctly when there's
+    // already a line to merge into - otherwise raising the qty on
+    // something you're already holding all of would incorrectly look
+    // like there's zero room left.
+    existing.qty = Math.min(avail + existing.qty, existing.qty + qty);
     untagKitOrigin(existing);
   } else {
     cart.push({itemId:item.id, name:item.name, qty: Math.min(avail, qty)});
@@ -2190,9 +2199,12 @@ function addKitToCart(kit){
     const item = inventory.find(i=>i.id===ref.itemId);
     if(!item){ short.push('an item that\'s no longer available'); return; }
     const existing = cart.find(c=>c.itemId===item.id);
-    const avail = availableQty(item);
-    const already = existing ? existing.qty : 0;
-    const room = Math.max(0, avail - already);
+    // availableQty(item) already excludes THIS cart's own existing hold on
+    // the item (the server subtracts it - see cart-holds.mjs), so it's
+    // already "how many more could be added," not "how many are free
+    // company-wide." Subtracting `already` again would double-count it and
+    // make a kit look short on something the cart already fully covers.
+    const room = Math.max(0, availableQty(item));
     if(room <= 0){ short.push(item.name); return; }
     const toAdd = Math.min(room, ref.qty);
     if(toAdd < ref.qty) short.push(item.name);
@@ -2259,7 +2271,16 @@ async function refreshAndReconcileCart(){
   cart = cart.filter(c=>{
     const item = inventory.find(i=>i.id===c.itemId);
     if(!item){ removed.push(c.name); changed = true; return false; }
-    const avail = availableQty(item);
+    // The server's `available` already subtracts THIS cart's own hold on
+    // the item (a shopper's own reservation counts against them everywhere
+    // except the actual checkout commit - see cart-holds.mjs). Without
+    // adding it back here, a shopper who'd already grabbed the last few of
+    // something would see their own cart wiped out the instant they
+    // reopened it, since the freshly-reloaded `available` would read as
+    // however much is left for someone ELSE to claim - correctly zero, not
+    // "you don't have any." What actually needs checking is whether c.qty
+    // still fits within (available + what this cart already holds).
+    const avail = availableQty(item) + c.qty;
     if(avail <= 0){ removed.push(c.name); changed = true; return false; }
     if(c.qty > avail){ c.qty = avail; changed = true; }
     return true;
@@ -2284,7 +2305,11 @@ async function refreshAndReconcileCart(){
 // *display* below must never change what idx means.
 function buildCartLine(c, idx, indented){
   const item = inventory.find(i=>i.id===c.itemId);
-  const avail = item ? availableQty(item) : c.qty;
+  // Add this line's own qty back - the server's `available` already
+  // excludes this cart's own hold on the item (see addToCart), so the
+  // stepper's real ceiling is "how many more could I add" PLUS "what I
+  // already have," not just the former.
+  const avail = item ? availableQty(item) + c.qty : c.qty;
   // Attribute (color/brand/SKU) and serial number, when the item has them -
   // shown so a shopper can actually verify they're grabbing the right
   // physical unit before confirming checkout, not just the right name.
@@ -2371,7 +2396,11 @@ function setCartQty(idx, newQty){
   const c = cart[idx];
   if(!c) return;
   const item = inventory.find(i=>i.id===c.itemId);
-  const avail = item ? availableQty(item) : c.qty;
+  // Same fix as buildCartLine/addToCart - the server's `available` already
+  // excludes this line's own hold, so raising qty back toward what you
+  // already had (or slightly beyond, if more freed up) needs that added
+  // back before comparing.
+  const avail = item ? availableQty(item) + c.qty : c.qty;
   if(newQty < 1) newQty = 1;
   if(newQty > avail){
     newQty = avail;
