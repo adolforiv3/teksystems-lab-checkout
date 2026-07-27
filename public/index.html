@@ -3990,7 +3990,12 @@ function renderKitItemSelect(){
   inventory.forEach(item=>{
     const opt = document.createElement('option');
     opt.value = item.id;
-    opt.textContent = `${item.name} (${item.qty} on hand)`;
+    // Attribute/serial number, when set, so two rows sharing a name (a
+    // batch of the same laptop model, individually serialed) are actually
+    // distinguishable in a plain <select> - same detail every other item
+    // picker in the app already shows (see itemOptionLabel).
+    const details = [item.attribute, item.serialNumber ? `SN ${item.serialNumber}` : ''].filter(Boolean).join(' · ');
+    opt.textContent = `${item.name}${details ? ' — ' + details : ''} (${item.qty} on hand)`;
     sel.appendChild(opt);
   });
   if(prev && inventory.some(i=>i.id===prev)) sel.value = prev;
@@ -4004,9 +4009,19 @@ function renderKitBuilderLines(){
   }
   wrap.innerHTML = "";
   kitBuilderItems.forEach((c,idx)=>{
+    // Resolved live from inventory by id (same "never trust a captured
+    // name/attribute, always look it up fresh" rule as startEditKit below)
+    // so the line always reflects whatever the item actually is right now,
+    // not whatever it was when first added to this kit.
+    const item = inventory.find(i=>i.id===c.itemId);
+    const details = item ? [item.attribute, item.serialNumber ? `SN ${item.serialNumber}` : ''].filter(Boolean).join(' · ') : '';
     const line = document.createElement('div');
     line.className = 'cart-line';
-    line.innerHTML = `<span class="cart-name">${escapeAttr(c.name)} <span class="mono" style="color:var(--ink-soft)">×${c.qty}</span></span><button class="rm">✕</button>`;
+    line.innerHTML = `
+      <span class="cart-name">${escapeAttr(c.name)} <span class="mono" style="color:var(--ink-soft)">×${c.qty}</span></span>
+      <button class="rm">✕</button>
+      ${details ? `<div class="cart-line-detail mono">${escapeAttr(details)}</div>` : ''}
+    `;
     line.querySelector('.rm').onclick = ()=>{ kitBuilderItems.splice(idx,1); renderKitBuilderLines(); };
     wrap.appendChild(line);
   });
