@@ -5442,8 +5442,16 @@ function buildMissingRow(c, it){
     <td></td>
   `;
   const actionTd = tr.lastElementChild;
-  actionTd.style.display = 'flex';
-  actionTd.style.gap = '6px';
+  // A wrapper div, not `display:flex` on the <td> itself - setting display
+  // directly on a table cell knocks it out of `display:table-cell`
+  // entirely, so it stops stretching to the row's real height and leaves
+  // the browser's plain white default showing through below it instead of
+  // this table's paper-gray row background (see buildTxnRow for the same
+  // fix, where it was actually visible).
+  const actionWrap = document.createElement('div');
+  actionWrap.style.display = 'flex';
+  actionWrap.style.gap = '6px';
+  actionTd.appendChild(actionWrap);
 
   const foundBtn = document.createElement('button');
   foundBtn.className = 'btn btn-ghost';
@@ -5459,7 +5467,7 @@ function buildMissingRow(c, it){
       handleAdminApiError(err);
     }
   };
-  actionTd.appendChild(foundBtn);
+  actionWrap.appendChild(foundBtn);
 
   const writeOffBtn = document.createElement('button');
   writeOffBtn.className = 'btn btn-ghost';
@@ -5483,7 +5491,7 @@ function buildMissingRow(c, it){
       handleAdminApiError(err);
     }
   };
-  actionTd.appendChild(writeOffBtn);
+  actionWrap.appendChild(writeOffBtn);
 
   return tr;
 }
@@ -5659,16 +5667,20 @@ function buildTxnRow(c){
   const itemsWrap = tr.querySelector('.txn-items-wrap');
   c.items.forEach(it=> itemsWrap.appendChild(buildTxnItemLine(c, it)));
   const actionTd = tr.lastElementChild;
-  actionTd.style.display = 'flex';
-  actionTd.style.flexDirection = 'column';
-  actionTd.style.gap = '6px';
-  actionTd.style.alignItems = 'flex-start';
-  // The first column (checked-out date/return-due/items) is usually the
-  // tallest thing in this row, and a flex column ignores `vertical-align`
-  // - left unset, the button stack pinned itself to the top of the cell
-  // and left a big flat unlabeled gap below it for any row with 1-2
-  // buttons, reading as a stray empty block next to real content.
-  actionTd.style.justifyContent = 'center';
+  // A wrapper div, not `display:flex` on the <td> itself - setting display
+  // directly on a table cell knocks it out of `display:table-cell`
+  // entirely, so the browser stops stretching it to the row's real height.
+  // The row still comes out just as tall (driven by column 1, usually the
+  // tallest), but this cell's own box now stops partway up it, and the gap
+  // below shows through as the page's plain white background instead of
+  // this table's paper-gray row background - a stray "blank block" next to
+  // real content on any row where the button stack is short.
+  const actionWrap = document.createElement('div');
+  actionWrap.style.display = 'flex';
+  actionWrap.style.flexDirection = 'column';
+  actionWrap.style.gap = '6px';
+  actionWrap.style.alignItems = 'flex-start';
+  actionTd.appendChild(actionWrap);
 
   if(s!=='returned'){
     const btn = document.createElement('button');
@@ -5686,13 +5698,13 @@ function buildTxnRow(c){
         handleAdminApiError(err);
       }
     };
-    actionTd.appendChild(btn);
+    actionWrap.appendChild(btn);
 
     const editBtn = document.createElement('button');
     editBtn.className = 'btn btn-ghost';
     editBtn.textContent = 'Edit items';
     editBtn.onclick = ()=> toggleEditItemsRow(tr, c);
-    actionTd.appendChild(editBtn);
+    actionWrap.appendChild(editBtn);
   }
 
   const resendBtn = document.createElement('button');
@@ -5715,7 +5727,7 @@ function buildTxnRow(c){
       resendBtn.disabled = false; resendBtn.textContent = 'Resend email';
     }
   };
-  actionTd.appendChild(resendBtn);
+  actionWrap.appendChild(resendBtn);
 
   return tr;
 }
