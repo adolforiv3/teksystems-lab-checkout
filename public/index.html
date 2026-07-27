@@ -974,15 +974,17 @@
 
           <div id="transferRequestBuilder" style="display:none;">
             <div class="small-note" style="margin-bottom:10px;">
-              Pick from what they actually have on hand below, or just type a name if it's something new - either
-              way, they still choose exactly what (and how much) to fulfill it with, or deny it.
+              Pick from what they actually have on hand below, or "+ Something else" if it's not in their list -
+              either way, they still choose exactly what (and how much) to fulfill it with, or deny it.
             </div>
             <input type="text" id="transferReqItemSearch" class="mono" placeholder="search their items, categories, attributes, serial #…" style="width:100%;margin-bottom:8px;">
-            <select id="transferReqItemSelect" class="mono" style="width:100%;margin-bottom:8px;"></select>
             <div class="admin-grid-form" style="grid-template-columns:2fr 1fr auto;">
-              <input type="text" id="transferReqName" placeholder="Item name" class="mono">
+              <select id="transferReqItemSelect" class="mono"></select>
               <input type="number" id="transferReqQty" min="1" value="1" class="mono" placeholder="Qty">
               <button class="btn btn-teal" id="transferReqAddBtn" type="button">Add</button>
+            </div>
+            <div id="transferReqCustomWrap" style="display:none; margin:-4px 0 10px;">
+              <input type="text" id="transferReqCustomName" placeholder="Item name" class="mono" style="width:100%; max-width:340px;">
             </div>
             <div id="transferReqLines" style="margin-bottom:6px;"></div>
           </div>
@@ -4141,53 +4143,52 @@ document.getElementById('transferOtherLab').addEventListener('change', ()=>{
 // change to what actually gets sent - the request is still a plain
 // {name, qty} wishlist (see transfers.mjs's "request" direction): the
 // source lab still always chooses exactly what real item(s) to fulfill it
-// with, or denies it outright.
+// with, or denies it outright. Same shape as "Send to them" on purpose
+// (search box above a select+qty+Add row) so the two builders don't read
+// as two different features - the only difference is a trailing
+// "+ Something else" option (same pattern as Add Item's category picker -
+// see NEW_CATEGORY_VALUE) for a real item that isn't in their list yet.
+const TRANSFER_REQ_CUSTOM_VALUE = '__custom__';
 let transferReqSearchTerm = "";
 function renderTransferReqItemSelect(){
   const sel = document.getElementById('transferReqItemSelect');
   const otherLabId = document.getElementById('transferOtherLab').value;
   const prev = sel.value;
+  const customOption = `<option value="${TRANSFER_REQ_CUSTOM_VALUE}">+ Something else (type a name)…</option>`;
   if(!otherLabId){
-    sel.innerHTML = '<option value="">Pick a lab above first</option>';
-    return;
+    sel.innerHTML = customOption;
+  } else {
+    const theirItems = companyInventory.filter(r=> r.labId === otherLabId);
+    const visible = transferReqSearchTerm
+      ? theirItems.filter(i=> looseSearchMatch(itemSearchText(i), transferReqSearchTerm))
+      : theirItems;
+    const itemOptions = visible.map(item=>{
+      const disabled = item.available === 0 ? ' disabled' : '';
+      return `<option value="${escapeAttr(item.id)}"${disabled}>${escapeAttr(itemOptionLabel(item, item.available))}</option>`;
+    }).join('');
+    sel.innerHTML = (visible.length ? itemOptions : '') + customOption;
+    if(prev && (visible.some(i=>i.id===prev) || prev===TRANSFER_REQ_CUSTOM_VALUE)) sel.value = prev;
   }
-  const theirItems = companyInventory.filter(r=> r.labId === otherLabId);
-  if(theirItems.length === 0){
-    sel.innerHTML = '<option value="">No visible inventory for that lab yet - just type a name below</option>';
-    return;
-  }
-  const visible = transferReqSearchTerm
-    ? theirItems.filter(i=> looseSearchMatch(itemSearchText(i), transferReqSearchTerm))
-    : theirItems;
-  if(visible.length === 0){
-    sel.innerHTML = '<option value="">No items match that search</option>';
-    return;
-  }
-  sel.innerHTML = '<option value="">— pick one of their items, or type a name below —</option>';
-  visible.forEach(item=>{
-    const opt = document.createElement('option');
-    opt.value = item.id;
-    opt.textContent = itemOptionLabel(item, item.available);
-    if(item.available === 0) opt.disabled = true;
-    sel.appendChild(opt);
-  });
-  if(prev && visible.some(i=>i.id===prev)) sel.value = prev;
+  updateTransferReqCustomVisibility();
+}
+function updateTransferReqCustomVisibility(){
+  const sel = document.getElementById('transferReqItemSelect');
+  const isCustom = sel.value === TRANSFER_REQ_CUSTOM_VALUE || !sel.value;
+  document.getElementById('transferReqCustomWrap').style.display = isCustom ? 'block' : 'none';
 }
 document.getElementById('transferReqItemSearch').addEventListener('input', debounce((e)=>{
   transferReqSearchTerm = e.target.value.trim();
   renderTransferReqItemSelect();
 }, 150));
 document.getElementById('transferReqItemSelect').addEventListener('change', (e)=>{
+  updateTransferReqCustomVisibility();
+  if(e.target.value === TRANSFER_REQ_CUSTOM_VALUE){
+    document.getElementById('transferReqCustomName').focus();
+    return;
+  }
   const otherLabId = document.getElementById('transferOtherLab').value;
   const item = companyInventory.find(r=> r.id===e.target.value && r.labId===otherLabId);
   if(!item) return;
-  // Folded into the free-text name (not a separate field) since that's all
-  // the "request" direction's wire shape actually carries - see the note
-  // above renderTransferReqItemSelect(). The source lab admin reading this
-  // request sees exactly which physical unit was meant, without the
-  // request format itself needing to change.
-  const details = [item.attribute, item.serialNumber ? `SN ${item.serialNumber}` : ''].filter(Boolean).join(' · ');
-  document.getElementById('transferReqName').value = details ? `${item.name} (${details})` : item.name;
   const qtyInput = document.getElementById('transferReqQty');
   qtyInput.value = Math.min(qtyInput.value || 1, item.available || 1) || 1;
   qtyInput.max = item.available || 1;
@@ -4278,12 +4279,27 @@ function renderTransferReqLines(){
 }
 
 document.getElementById('transferReqAddBtn').onclick = ()=>{
-  const name = document.getElementById('transferReqName').value.trim();
+  const sel = document.getElementById('transferReqItemSelect');
   const qtyInput = document.getElementById('transferReqQty');
   const qty = Math.max(1, parseInt(qtyInput.value) || 1);
-  if(!name){ showToast('Enter an item name'); return; }
+  let name;
+  if(sel.value === TRANSFER_REQ_CUSTOM_VALUE || !sel.value){
+    name = document.getElementById('transferReqCustomName').value.trim();
+    if(!name){ showToast('Enter an item name'); return; }
+  } else {
+    // Folded into the plain-text name (not a separate field) since that's
+    // all the "request" direction's wire shape actually carries - see the
+    // note above renderTransferReqItemSelect(). The source lab admin
+    // reading this request sees exactly which physical unit was meant,
+    // without the request format itself needing to change.
+    const otherLabId = document.getElementById('transferOtherLab').value;
+    const item = companyInventory.find(r=> r.id===sel.value && r.labId===otherLabId);
+    if(!item){ showToast('Pick an item first'); return; }
+    const details = [item.attribute, item.serialNumber ? `SN ${item.serialNumber}` : ''].filter(Boolean).join(' · ');
+    name = details ? `${item.name} (${details})` : item.name;
+  }
   transferReqCart.push({name, qty});
-  document.getElementById('transferReqName').value = '';
+  document.getElementById('transferReqCustomName').value = '';
   document.getElementById('transferReqQty').value = '1';
   renderTransferReqLines();
 };
