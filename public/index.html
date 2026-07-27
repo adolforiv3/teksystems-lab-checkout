@@ -5391,6 +5391,17 @@ function renderLog(){
     return;
   }
   groups.forEach(g=> renderPersonRow(tbody, g));
+  // renderLog() rebuilds the whole table from scratch, including on the
+  // 8s background auto-refresh poll - without this, an admin reading
+  // someone's "View history" trail would watch it silently snap shut out
+  // from under them every few seconds. Re-expanding the same person (by
+  // personKey, not row position - the sorted/filtered order can shift
+  // between refreshes) keeps the poll from being visible while browsing.
+  if(expandedPersonKey){
+    const row = [...tbody.querySelectorAll('.person-row')].find(tr=> tr.dataset.personKey === expandedPersonKey);
+    const g = groups.find(g=> personKey(g.checkouts[0]) === expandedPersonKey);
+    if(row && g) togglePersonDetail(row, g);
+  }
 }
 
 /* ---------- ADMIN: Missing Items bucket ---------- */
@@ -5482,10 +5493,17 @@ function buildMissingRow(c, it){
 // to live here too, but with several checkouts rolled into one row that
 // became a wall of text; that level of detail now belongs inside the
 // expanded view, next to the specific checkout it came from.
+// Which person's "View history" trail is currently expanded, keyed by
+// personKey() (email, or name when there's no email) rather than row
+// position - renderLog() re-reads this to restore the expansion after a
+// background refresh rebuilds the table (see renderLog).
+let expandedPersonKey = null;
+
 function renderPersonRow(tbody, g){
   const s = personStatus(g);
   const tr = document.createElement('tr');
   tr.className = 'person-row';
+  tr.dataset.personKey = personKey(g.checkouts[0]);
   const badgeClass = s==='overdue'?'overdue':s==='returned'?'returned':'active';
   const countTag = `<span class="mono person-count-tag">${g.checkouts.length} checkout${g.checkouts.length>1?'s':''}</span>`;
   tr.innerHTML = `
@@ -5518,9 +5536,11 @@ function togglePersonDetail(personRow, g){
       n = n.nextElementSibling;
       toRemove.remove();
     }
+    expandedPersonKey = null;
     return;
   }
   document.querySelectorAll('.person-detail-marker, .txn-row, .person-history-row, .edit-items-row, .history-row').forEach(r=> r.remove());
+  expandedPersonKey = personKey(g.checkouts[0]);
 
   let anchor = personRow;
 
@@ -5643,6 +5663,12 @@ function buildTxnRow(c){
   actionTd.style.flexDirection = 'column';
   actionTd.style.gap = '6px';
   actionTd.style.alignItems = 'flex-start';
+  // The first column (checked-out date/return-due/items) is usually the
+  // tallest thing in this row, and a flex column ignores `vertical-align`
+  // - left unset, the button stack pinned itself to the top of the cell
+  // and left a big flat unlabeled gap below it for any row with 1-2
+  // buttons, reading as a stray empty block next to real content.
+  actionTd.style.justifyContent = 'center';
 
   if(s!=='returned'){
     const btn = document.createElement('button');
