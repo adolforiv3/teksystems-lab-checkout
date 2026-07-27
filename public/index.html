@@ -1839,16 +1839,34 @@ const scheduleShopperCartHoldSync = debounce(()=>{
 const scheduleClientCartHoldSync = debounce(()=>{
   syncCartHold('/.netlify/functions/cart-holds', clientCart.map(c=>({itemId:c.itemId, qty:c.qty})));
 }, 400);
+// getComputedStyle, not .style.display - the raw inline property stays an
+// untouched empty string ("" !== 'none' is true!) for any view a session
+// never actually switched into, which is the normal case for e.g. a
+// shopper who never opened the admin/DRI views. Checking computed style
+// falls back to each view's real CSS default (display:none) instead of
+// misreading "never touched" as "visible." See the 8s auto-refresh poll
+// below for where this exact confusion previously leaked a DRI-only fetch
+// into a plain shopper's cart flow and surfaced a bogus "Session expired."
+function isViewShown(id){
+  return getComputedStyle(document.getElementById(id)).display !== 'none';
+}
+// A shopper is still "in their cart" whether they're looking at the grid
+// (#main-view) or the cart drawer itself (#cart-view) - the hold heartbeat
+// below needs to keep going in both, not just the grid.
+function isShopperViewActive(){
+  return isViewShown('main-view') || isViewShown('cart-view');
+}
+
 // Heartbeat: re-sends whichever cart is actually active every 90s so a
 // shopper who's slow to check out (reading a return-date field, typing an
 // email) doesn't lose their hold to the TTL mid-decision - the debounced
 // syncs above only fire on a mutation, this covers "sat there thinking."
 setInterval(()=>{
   if(document.hidden) return;
-  if(cart.length && document.getElementById('main-view').style.display !== 'none'){
+  if(cart.length && isShopperViewActive()){
     syncCartHold('/.netlify/functions/cart-holds?lab=' + encodeURIComponent(labUrlParam()), cart.map(c=>({itemId:c.itemId, qty:c.qty})));
   }
-  if(typeof clientCart !== 'undefined' && clientCart.length && document.getElementById('client-view').style.display !== 'none'){
+  if(typeof clientCart !== 'undefined' && clientCart.length && isViewShown('client-view')){
     syncCartHold('/.netlify/functions/cart-holds', clientCart.map(c=>({itemId:c.itemId, qty:c.qty})));
   }
 }, 90000);
@@ -1882,14 +1900,23 @@ function isAnyOverlayOpen(){
 // isAnyOverlayOpen) so an in-progress dialog is never disturbed.
 setInterval(async ()=>{
   if(document.hidden || isEditingSomething() || isAnyOverlayOpen()) return;
+  // getComputedStyle, not .style.display: every one of these views is
+  // hidden by a CSS default (#client-view, #admin-view) that a session
+  // which never actually entered that view has no reason to ever touch
+  // inline - checking the raw .style.display property left it as an
+  // untouched empty string (`"" !== 'none'` is true!) for exactly that
+  // case, so a shopper with their cart open (main-view hidden, nothing
+  // else ever shown) fell through into the DRI-catalog branch below,
+  // fetched an endpoint they have no access to, and got hit with a
+  // confusing "Session expired" toast that had nothing to do with them.
   try{
-    if(document.getElementById('main-view').style.display !== 'none' && currentLab.id){
+    if(isViewShown('main-view') && currentLab.id){
       await loadData({ skipKits: true });
       renderGrid();
-    } else if(document.getElementById('client-view').style.display !== 'none'){
+    } else if(isViewShown('client-view')){
       clientCatalog = await fetchClientCatalogSafe();
       renderClientCatalog();
-    } else if(document.getElementById('admin-view').style.display !== 'none' && currentLab.id){
+    } else if(isViewShown('admin-view') && currentLab.id){
       // Same bundle switchAdminToLab already refreshes on every lab switch -
       // Lab Inventory (with its onHold badges), Checkout Log, Missing
       // Items, Kits, Transfers, and Source Requests all read from the same
