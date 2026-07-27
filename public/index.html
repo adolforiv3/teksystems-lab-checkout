@@ -101,6 +101,18 @@
   }
   #search{ flex:1; min-width:160px; }
   .chipbar{ display:flex; gap:10px; flex-wrap:wrap; margin-bottom:22px; }
+  /* The category filter specifically can run to a dozen+ chips (one per
+     category in the lab), which wrapped into a messy multi-row grid on a
+     narrow phone screen. One scrollable line reads far cleaner and is the
+     pattern shoppers already expect from filter chips on mobile - same
+     horizontal-scroll idea .kit-cards already uses just below. */
+  #categoryChips{
+    flex-wrap:nowrap; overflow-x:auto; overflow-y:hidden;
+    -webkit-overflow-scrolling:touch; scrollbar-width:none;
+    padding-bottom:2px; margin-left:-2px; padding-left:2px;
+  }
+  #categoryChips::-webkit-scrollbar{ display:none; }
+  #categoryChips .chip{ flex:0 0 auto; }
   .chip{
     font-size:12.5px; font-weight:500; letter-spacing:.01em;
     padding:9px 17px; border:1px solid var(--border); border-radius:var(--r-pill); background:var(--card);
