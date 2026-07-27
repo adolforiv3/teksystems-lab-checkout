@@ -2059,7 +2059,17 @@ function reservedQty(item){
 }
 
 function renderChips(){
-  const cats = ["all", ...new Set(inventory.map(i=>i.category).filter(Boolean))];
+  // "All" always leads, everything else alphabetical - so the scrollable
+  // row (see #categoryChips) reads in a predictable order instead of
+  // whatever order categories happened to get added to inventory in.
+  const cats = [
+    "all",
+    ...new Set(inventory.map(i=>i.category).filter(Boolean)),
+  ].sort((a,b)=>{
+    if(a==='all') return -1;
+    if(b==='all') return 1;
+    return a.localeCompare(b, undefined, {sensitivity:'base'});
+  });
   const bar = document.getElementById('categoryChips');
   bar.innerHTML = "";
   cats.forEach(c=>{
