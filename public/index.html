@@ -4089,6 +4089,7 @@ document.querySelectorAll('[data-transferdir]').forEach(chip=>{
     document.getElementById('transferSendBuilder').style.display = transferDirection==='send' ? 'block' : 'none';
     document.getElementById('transferRequestBuilder').style.display = transferDirection==='request' ? 'block' : 'none';
     if(transferDirection === 'request') renderTransferReqItemSelect();
+    updateTransferSubmitButtonState();
   };
 });
 
@@ -4132,6 +4133,7 @@ document.getElementById('transferOtherLab').addEventListener('change', ()=>{
   transferReqSearchTerm = "";
   document.getElementById('transferReqItemSearch').value = "";
   renderTransferReqItemSelect();
+  updateTransferSubmitButtonState();
 });
 
 // Requesting from another lab used to be a blind wishlist by name only -
@@ -4230,10 +4232,25 @@ document.getElementById('transferSendItemSearch').addEventListener('input', debo
   renderTransferSendItemSelect();
 }, 150));
 
+// Greyed out (see .btn:disabled) until a proposal is actually complete
+// enough to send: a lab picked, and at least one item in the cart for
+// whichever direction is currently active - the same two checks the click
+// handler below already enforces with a toast, just visible up front
+// instead of only after someone clicks and gets turned away.
+function updateTransferSubmitButtonState(){
+  const btn = document.getElementById('transferSubmitBtn');
+  const otherLabId = document.getElementById('transferOtherLab').value;
+  const cart = transferDirection === 'send' ? transferSendCart : transferReqCart;
+  const ready = !!otherLabId && cart.length > 0;
+  btn.disabled = !ready;
+  btn.title = ready ? '' : (!otherLabId ? 'Pick a lab first' : 'Add at least one item first');
+}
+
 function renderTransferSendLines(){
   const wrap = document.getElementById('transferSendLines');
   if(transferSendCart.length === 0){
     wrap.innerHTML = '<div class="empty" style="padding:10px 0;">No items added yet.</div>';
+    updateTransferSubmitButtonState();
     return;
   }
   wrap.innerHTML = "";
@@ -4244,6 +4261,7 @@ function renderTransferSendLines(){
     line.querySelector('.rm').onclick = ()=>{ transferSendCart.splice(idx,1); renderTransferSendLines(); };
     wrap.appendChild(line);
   });
+  updateTransferSubmitButtonState();
 }
 
 document.getElementById('transferSendAddBtn').onclick = ()=>{
@@ -4266,6 +4284,7 @@ function renderTransferReqLines(){
   const wrap = document.getElementById('transferReqLines');
   if(transferReqCart.length === 0){
     wrap.innerHTML = '<div class="empty" style="padding:10px 0;">No items added yet.</div>';
+    updateTransferSubmitButtonState();
     return;
   }
   wrap.innerHTML = "";
@@ -4276,6 +4295,7 @@ function renderTransferReqLines(){
     line.querySelector('.rm').onclick = ()=>{ transferReqCart.splice(idx,1); renderTransferReqLines(); };
     wrap.appendChild(line);
   });
+  updateTransferSubmitButtonState();
 }
 
 document.getElementById('transferReqAddBtn').onclick = ()=>{
