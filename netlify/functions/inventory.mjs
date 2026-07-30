@@ -5,7 +5,7 @@ import { updateJSON, ConcurrentWriteError } from "./lib/occ.mjs";
 import { checkLowStockAndNotify, availableQty } from "./lib/lowstock.mjs";
 import { computePendingHolds, claimableQty } from "./lib/holds.mjs";
 import { json, withErrorBoundary } from "./lib/http.mjs";
-import { nextSku, nextSkuBatch } from "./lib/sku.mjs";
+import { nextSku, nextSkuBatchForPrefix, prefixFor } from "./lib/sku.mjs";
 
 class ApiError extends Error {
   constructor(message, status) {
@@ -126,10 +126,13 @@ export default withErrorBoundary(async (req) => {
   // inventory created before SKUs existed. Superadmin-only since, unlike
   // every other write in this file, it isn't scoped to a single lab at all;
   // a lab-admin has no business touching another lab's items even just to
-  // stamp a SKU on them. Allocates every SKU it needs in one shared-counter
-  // batch (see nextSkuBatch) rather than one compare-and-swap per item, then
-  // writes each lab's inventory back in a single pass so this stays safe to
-  // run again later without re-numbering anything that already has a SKU.
+  // stamp a SKU on them. Groups every missing item, across every lab, by
+  // its category prefix (see prefixFor) so each prefix's shared counter
+  // only needs one compare-and-swap for its whole batch - a company with
+  // 40 "Books" scattered across 6 labs still only costs one write to
+  // BOOK's counter, not 40. Writes each lab's inventory back in a single
+  // pass so this stays safe to run again later without re-numbering
+  // anything that already has a SKU.
   if (method === "POST" && url.searchParams.get("backfillSkus") === "1") {
     if (!isSuperadmin(admin)) return json({ error: admin ? "superadmin only" : "unauthorized" }, admin ? 403 : 401);
     const labs = await loadLabsForRead(labRegistryStore());
@@ -138,21 +141,32 @@ export default withErrorBoundary(async (req) => {
         const labInventoryStore = labStore(lab.id);
         const inv = (await labInventoryStore.get("inventory", { type: "json" })) || [];
         const missing = inv.filter((i) => !i.sku);
-        return { lab, labInventoryStore, inv, missingIds: missing.map((i) => i.id) };
+        return { lab, labInventoryStore, missing };
       })
     );
-    const totalMissing = perLab.reduce((sum, l) => sum + l.missingIds.length, 0);
+    const totalMissing = perLab.reduce((sum, l) => sum + l.missing.length, 0);
     if (totalMissing === 0) return json({ assigned: 0, labs: 0 });
 
-    const skus = await nextSkuBatch(totalMissing);
-    let cursor = 0;
+    const byPrefix = new Map(); // prefix -> [{itemId}]
+    for (const { missing } of perLab) {
+      for (const item of missing) {
+        const prefix = prefixFor(item.category);
+        if (!byPrefix.has(prefix)) byPrefix.set(prefix, []);
+        byPrefix.get(prefix).push(item.id);
+      }
+    }
+    const skuByItemId = new Map();
+    for (const [prefix, itemIds] of byPrefix) {
+      const skus = await nextSkuBatchForPrefix(prefix, itemIds.length);
+      itemIds.forEach((id, i) => skuByItemId.set(id, skus[i]));
+    }
+
     let labsTouched = 0;
-    for (const { lab, labInventoryStore, missingIds } of perLab) {
-      if (missingIds.length === 0) continue;
-      const skusForLab = new Map(missingIds.map((id) => [id, skus[cursor++]]));
+    for (const { labInventoryStore, missing } of perLab) {
+      if (missing.length === 0) continue;
       await updateJSON(labInventoryStore, "inventory", async (current) => {
         const currentInv = current || [];
-        return currentInv.map((i) => (skusForLab.has(i.id) ? { ...i, sku: skusForLab.get(i.id) } : i));
+        return currentInv.map((i) => (skuByItemId.has(i.id) ? { ...i, sku: skuByItemId.get(i.id) } : i));
       });
       labsTouched++;
     }
@@ -325,10 +339,12 @@ export default withErrorBoundary(async (req) => {
         // Human-readable, company-wide unique identifier - unlike `id`
         // (an internal UUID never meant to be read/typed by a person),
         // this is what a shopper sees on a printed label, in a cart line,
-        // or in an item picker to tell two same-named items apart. One
-        // shared global counter (see lib/sku.mjs) means no two labs can
-        // ever mint the same code, without needing any per-lab prefix.
-        sku: await nextSku(),
+        // or in an item picker to tell two same-named items apart. Prefixed
+        // by category (see prefixFor) so a SKU actually says something at a
+        // glance - "BOOK-000004" vs "SHOE-000012" - while still drawing
+        // from one shared per-prefix counter (see lib/sku.mjs) so no two
+        // labs can ever mint the same code.
+        sku: await nextSku(body.category),
         name: body.name,
         category: body.category || "",
         qty: body.qty,

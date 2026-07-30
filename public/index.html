@@ -842,10 +842,10 @@
             <input type="text" id="newCatCustom" placeholder="New category name" class="mono" style="width:100%; max-width:340px;">
           </div>
           <div style="display:flex; gap:10px; margin:-4px 0 14px; flex-wrap:wrap;">
-            <input type="text" id="newAttribute" placeholder="Color / brand / SKU / etc. (optional)" class="mono" style="flex:1; min-width:220px;">
+            <input type="text" id="newAttribute" placeholder="Color / brand / model / etc. (optional)" class="mono" style="flex:1; min-width:220px;">
             <input type="text" id="newSerial" placeholder="Serial number / device ID (optional)" class="mono" style="flex:1; min-width:220px;">
           </div>
-          <div class="small-note">Category picks from what's already in this lab so you're not retyping the same label every time - pick "+ Add new category…" the first time you need one that doesn't exist yet. Attribute is an optional free-text descriptor — color, brand, SKU, whatever's useful for telling similar items apart. Serial number is optional too, for individually-tracked devices rather than bulk consumables.</div>
+          <div class="small-note">Category picks from what's already in this lab so you're not retyping the same label every time - pick "+ Add new category…" the first time you need one that doesn't exist yet - it also shapes this item's SKU (e.g. "Books" → BOOK-000004), assigned automatically once you add it. Attribute is an optional free-text descriptor — color, brand, model, whatever's useful for telling similar items apart. Serial number is optional too, for individually-tracked devices rather than bulk consumables.</div>
         </div>
 
         <div class="admin-section" data-admin-section="adminAccounts" id="adminAccountsSection">
@@ -5094,8 +5094,8 @@ function buildInvRow(item){
         <div class="meta-row">
           <span class="meta-label">Attribute</span>
           <span class="attribute-label mono">${item.attribute ? escapeAttr(item.attribute) : '—'}</span>
-          <button class="meta-edit-btn attribute-edit-btn" type="button" title="Edit attribute (color, brand, SKU, etc.)">✎</button>
-          <input type="text" value="${escapeAttr(item.attribute||'')}" class="attributeEdit mono" placeholder="color / brand / SKU" style="display:none;">
+          <button class="meta-edit-btn attribute-edit-btn" type="button" title="Edit attribute (color, brand, model, etc.)">✎</button>
+          <input type="text" value="${escapeAttr(item.attribute||'')}" class="attributeEdit mono" placeholder="color / brand / model" style="display:none;">
         </div>
         <div class="meta-row">
           <span class="meta-label">Serial #</span>
