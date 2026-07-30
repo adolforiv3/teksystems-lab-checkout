@@ -1,10 +1,11 @@
-import { resolveAdmin, canAccessLab, isClient } from "./lib/auth.mjs";
+import { resolveAdmin, canAccessLab, isClient, isSuperadmin } from "./lib/auth.mjs";
 import { labStore, labRegistryStore } from "./lib/stores.mjs";
 import { resolveLab, loadLabsForRead } from "./lib/lab-registry.mjs";
 import { updateJSON, ConcurrentWriteError } from "./lib/occ.mjs";
 import { checkLowStockAndNotify, availableQty } from "./lib/lowstock.mjs";
 import { computePendingHolds, claimableQty } from "./lib/holds.mjs";
 import { json, withErrorBoundary } from "./lib/http.mjs";
+import { nextSku, nextSkuBatch } from "./lib/sku.mjs";
 
 class ApiError extends Error {
   constructor(message, status) {
@@ -39,6 +40,7 @@ function sanitizeItemForRole(item, role) {
   if (role !== "client") return item;
   return {
     id: item.id,
+    sku: item.sku || "",
     name: item.name,
     category: item.category || "",
     attribute: item.attribute || "",
@@ -118,6 +120,44 @@ export default withErrorBoundary(async (req) => {
   const method = req.method;
 
   const admin = await resolveAdmin(req);
+
+  // One-time (or re-run-safe) migration: assigns a SKU to every item across
+  // every lab in the company that doesn't already have one - covers
+  // inventory created before SKUs existed. Superadmin-only since, unlike
+  // every other write in this file, it isn't scoped to a single lab at all;
+  // a lab-admin has no business touching another lab's items even just to
+  // stamp a SKU on them. Allocates every SKU it needs in one shared-counter
+  // batch (see nextSkuBatch) rather than one compare-and-swap per item, then
+  // writes each lab's inventory back in a single pass so this stays safe to
+  // run again later without re-numbering anything that already has a SKU.
+  if (method === "POST" && url.searchParams.get("backfillSkus") === "1") {
+    if (!isSuperadmin(admin)) return json({ error: admin ? "superadmin only" : "unauthorized" }, admin ? 403 : 401);
+    const labs = await loadLabsForRead(labRegistryStore());
+    const perLab = await Promise.all(
+      labs.map(async (lab) => {
+        const labInventoryStore = labStore(lab.id);
+        const inv = (await labInventoryStore.get("inventory", { type: "json" })) || [];
+        const missing = inv.filter((i) => !i.sku);
+        return { lab, labInventoryStore, inv, missingIds: missing.map((i) => i.id) };
+      })
+    );
+    const totalMissing = perLab.reduce((sum, l) => sum + l.missingIds.length, 0);
+    if (totalMissing === 0) return json({ assigned: 0, labs: 0 });
+
+    const skus = await nextSkuBatch(totalMissing);
+    let cursor = 0;
+    let labsTouched = 0;
+    for (const { lab, labInventoryStore, missingIds } of perLab) {
+      if (missingIds.length === 0) continue;
+      const skusForLab = new Map(missingIds.map((id) => [id, skus[cursor++]]));
+      await updateJSON(labInventoryStore, "inventory", async (current) => {
+        const currentInv = current || [];
+        return currentInv.map((i) => (skusForLab.has(i.id) ? { ...i, sku: skusForLab.get(i.id) } : i));
+      });
+      labsTouched++;
+    }
+    return json({ assigned: totalMissing, labs: labsTouched });
+  }
 
   // Client-DRI catalog: every item across EVERY lab company-wide - a client
   // isn't "scoped" to any lab the way a labadmin is (isClient() admins
@@ -282,6 +322,13 @@ export default withErrorBoundary(async (req) => {
 
       const newItem = {
         id: crypto.randomUUID(),
+        // Human-readable, company-wide unique identifier - unlike `id`
+        // (an internal UUID never meant to be read/typed by a person),
+        // this is what a shopper sees on a printed label, in a cart line,
+        // or in an item picker to tell two same-named items apart. One
+        // shared global counter (see lib/sku.mjs) means no two labs can
+        // ever mint the same code, without needing any per-lab prefix.
+        sku: await nextSku(),
         name: body.name,
         category: body.category || "",
         qty: body.qty,

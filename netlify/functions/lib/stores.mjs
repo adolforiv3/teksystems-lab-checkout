@@ -53,3 +53,11 @@ export function sourceRequestsStore() {
 export function cartHoldsStore() {
   return getStore({ name: "cart-holds", consistency: "strong" });
 }
+// One shared, company-wide counter backing every item's human-readable SKU
+// (see lib/sku.mjs). Has to live outside any single lab's own store -
+// the whole point is a single sequence with no possibility of two labs
+// independently minting the same code, which per-lab storage can't
+// guarantee on its own.
+export function skuRegistryStore() {
+  return getStore({ name: "sku-registry", consistency: "strong" });
+}
