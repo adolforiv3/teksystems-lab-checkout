@@ -845,7 +845,13 @@
             <input type="text" id="newAttribute" placeholder="Color / brand / model / etc. (optional)" class="mono" style="flex:1; min-width:220px;">
             <input type="text" id="newSerial" placeholder="Serial number / device ID (optional)" class="mono" style="flex:1; min-width:220px;">
           </div>
-          <div class="small-note">Category picks from what's already in this lab so you're not retyping the same label every time - pick "+ Add new category…" the first time you need one that doesn't exist yet - it also shapes this item's SKU (e.g. "Books" → BOOK-000004), assigned automatically once you add it. Attribute is an optional free-text descriptor — color, brand, model, whatever's useful for telling similar items apart. Serial number is optional too, for individually-tracked devices rather than bulk consumables.</div>
+          <div style="display:flex; align-items:center; gap:10px; margin:-4px 0 14px;">
+            <img id="newPhotoPreview" style="display:none; width:44px; height:44px; object-fit:cover; border-radius:8px; border:1px solid var(--border);">
+            <label class="btn btn-ghost" for="newPhoto" style="cursor:pointer;">📷 Add a photo (optional)</label>
+            <input type="file" id="newPhoto" accept="image/*" style="display:none;">
+            <button class="link-btn" id="newPhotoClear" type="button" style="display:none;">remove photo</button>
+          </div>
+          <div class="small-note">Category picks from what's already in this lab so you're not retyping the same label every time - pick "+ Add new category…" the first time you need one that doesn't exist yet - it also shapes this item's SKU (e.g. "Books" → BOOK-000004), assigned automatically once you add it. Attribute is an optional free-text descriptor — color, brand, model, whatever's useful for telling similar items apart. Serial number is optional too, for individually-tracked devices rather than bulk consumables. A photo is resized and compressed automatically right in your browser before it uploads - just pick one, no extra steps.</div>
         </div>
 
         <div class="admin-section" data-admin-section="adminAccounts" id="adminAccountsSection">
@@ -1860,6 +1866,56 @@ async function apiWrite(path, method, body, admin=false){
     throw err;
   }
   return res.json();
+}
+
+/* ---- item photos: resized/compressed client-side before upload, so
+   whatever a phone camera actually produces (routinely several MB) never
+   has to be a manual step for whoever's adding the item - they just pick a
+   photo and this runs automatically before the network request goes out.
+   Kept well under item-image.mjs's hard 400KB backstop with real margin to
+   spare. ---- */
+const ITEM_IMAGE_MAX_DIMENSION = 800; // px, longest side
+const ITEM_IMAGE_QUALITY = 0.72; // JPEG quality, 0-1
+
+function compressImageFile(file){
+  return new Promise((resolve, reject)=>{
+    const img = new Image();
+    const objectUrl = URL.createObjectURL(file);
+    img.onload = ()=>{
+      URL.revokeObjectURL(objectUrl);
+      let { width, height } = img;
+      if(width > ITEM_IMAGE_MAX_DIMENSION || height > ITEM_IMAGE_MAX_DIMENSION){
+        const scale = ITEM_IMAGE_MAX_DIMENSION / Math.max(width, height);
+        width = Math.round(width * scale);
+        height = Math.round(height * scale);
+      }
+      const canvas = document.createElement('canvas');
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(img, 0, 0, width, height);
+      resolve(canvas.toDataURL('image/jpeg', ITEM_IMAGE_QUALITY));
+    };
+    img.onerror = ()=>{
+      URL.revokeObjectURL(objectUrl);
+      reject(new Error('Could not read that image file'));
+    };
+    img.src = objectUrl;
+  });
+}
+
+function itemImageUrl(labId, itemId){
+  return `/.netlify/functions/item-image?lab=${encodeURIComponent(labId)}&item=${encodeURIComponent(itemId)}`;
+}
+
+// `admin` mirrors apiWrite's own flag - true for every caller here, since
+// uploading/removing a photo is always an admin (or client-DRI, N/A here)
+// action, never something an anonymous shopper does.
+async function uploadItemImage(labId, itemId, dataUrl){
+  return apiWrite(itemImageUrl(labId, itemId), 'POST', { dataUrl }, true);
+}
+async function deleteItemImage(labId, itemId){
+  return apiWrite(itemImageUrl(labId, itemId), 'DELETE', {}, true);
 }
 
 /* ---- cart holds: tell the server "I have this in my cart right now" so a
@@ -3453,9 +3509,14 @@ function buildCompanyInvRow(row){
   const tr = document.createElement('tr');
   tr.innerHTML = `
     <td style="min-width:200px;">
-      <span class="mono">${escapeAttr(row.name)}</span>
-      ${row.sku ? `<br><span class="item-sku mono">${escapeAttr(row.sku)}</span>` : ''}
-      ${row.attribute ? `<br><span class="item-attribute">${escapeAttr(row.attribute)}</span>` : ''}
+      <div style="display:flex; gap:8px; align-items:flex-start;">
+        ${row.hasImage ? `<img src="${escapeAttr(itemImageUrl(row.labId, row.id))}" style="width:32px;height:32px;object-fit:cover;border-radius:6px;border:1px solid var(--border);flex-shrink:0;">` : ''}
+        <div>
+          <span class="mono">${escapeAttr(row.name)}</span>
+          ${row.sku ? `<br><span class="item-sku mono">${escapeAttr(row.sku)}</span>` : ''}
+          ${row.attribute ? `<br><span class="item-attribute">${escapeAttr(row.attribute)}</span>` : ''}
+        </div>
+      </div>
     </td>
     <td>
       <span class="cat-dot" style="background:${catCol.solid}"></span>
@@ -3882,6 +3943,34 @@ document.getElementById('newCatSelect').addEventListener('change', ()=>{
   if(isNew) document.getElementById('newCatCustom').focus();
 });
 
+// Compressed right away, on selection - not deferred to submit time - so
+// the (rare, but real) case of a slow/huge phone photo shows its own
+// "reading photo…" moment separately from "Item added," rather than
+// stalling the whole add-item submit behind image work that has nothing to
+// do with whether the name/category/qty are valid.
+let newPhotoDataUrl = null;
+document.getElementById('newPhoto').addEventListener('change', async (e)=>{
+  const file = e.target.files[0];
+  if(!file) return;
+  const preview = document.getElementById('newPhotoPreview');
+  const clearBtn = document.getElementById('newPhotoClear');
+  try{
+    newPhotoDataUrl = await compressImageFile(file);
+    preview.src = newPhotoDataUrl;
+    preview.style.display = 'inline-block';
+    clearBtn.style.display = 'inline';
+  }catch(err){
+    showToast(err.message || 'Could not read that photo');
+    newPhotoDataUrl = null;
+  }
+});
+document.getElementById('newPhotoClear').onclick = ()=>{
+  newPhotoDataUrl = null;
+  document.getElementById('newPhoto').value = '';
+  document.getElementById('newPhotoPreview').style.display = 'none';
+  document.getElementById('newPhotoClear').style.display = 'none';
+};
+
 document.getElementById('addItemBtn').onclick = async ()=>{
   const name = document.getElementById('newName').value.trim();
   const catSelect = document.getElementById('newCatSelect');
@@ -3893,12 +3982,26 @@ document.getElementById('addItemBtn').onclick = async ()=>{
   if(!name || qty<=0){ showToast('Enter a name and a positive quantity'); return; }
   if(usingNewCat && !cat){ showToast('Enter a name for the new category'); return; }
   try{
+    // Captured before the write so the freshly-created item can be told
+    // apart from every pre-existing one afterward - the POST response is
+    // just the whole sorted inventory array, with no other way to know
+    // which row is the new one.
+    const priorIds = new Set(inventory.map(i=>i.id));
     inventory = await apiWrite(invUrl(), 'POST', {name, category:cat, qty, attribute, serialNumber}, true);
+    const created = inventory.find(i=> !priorIds.has(i.id));
+    if(created && newPhotoDataUrl){
+      try{
+        inventory = await uploadItemImage(currentLab.id, created.id, newPhotoDataUrl);
+      }catch(err){
+        showToast('Item added, but the photo failed to upload - you can add it from Lab Inventory');
+      }
+    }
     document.getElementById('newName').value='';
     document.getElementById('newQty').value='';
     document.getElementById('newAttribute').value='';
     document.getElementById('newSerial').value='';
     document.getElementById('newCatCustom').value='';
+    document.getElementById('newPhotoClear').onclick();
     populateNewCatSelect();
     catSelect.value = [...catSelect.options].some(o=> o.value === cat) ? cat : '';
     document.getElementById('newCatCustomWrap').style.display = 'none';
@@ -5102,28 +5205,40 @@ function buildInvRow(item){
   const tr = document.createElement('tr');
   tr.innerHTML = `
     <td style="min-width:260px;">
-      <input type="text" value="${escapeAttr(item.name)}" class="nameEdit mono" style="width:100%;min-width:200px;">
-      ${item.onHold > 0 ? `<div style="margin-top:6px;"><span class="badge active" title="Claimed by a pending client source request or an outgoing transfer proposal - still fully in stock until that's actually accepted/fulfilled.">⏳ ${item.onHold} on hold</span></div>` : ''}
-      <div class="item-meta">
-        ${item.sku ? `<div class="meta-row"><span class="meta-label">SKU</span><span class="mono item-sku">${escapeAttr(item.sku)}</span></div>` : ''}
-        <div class="meta-row">
-          <span class="meta-label">Category</span>
-          <span class="cat-dot" style="background:${catCol.solid}"></span>
-          <span class="cat-label mono" style="color:${catCol.solid}">${item.category ? escapeAttr(item.category) : '—'}</span>
-          <button class="meta-edit-btn cat-edit-btn" type="button" title="Edit category">✎</button>
-          <input type="text" value="${escapeAttr(item.category||'')}" class="catEdit mono" placeholder="category" style="display:none;">
+      <div style="display:flex; gap:10px; align-items:flex-start;">
+        <div class="inv-photo-wrap" style="flex-shrink:0;">
+          <img class="inv-photo-thumb" src="${item.hasImage ? escapeAttr(itemImageUrl(currentLab.id, item.id)) : ''}" style="${item.hasImage ? '' : 'display:none;'} width:48px;height:48px;object-fit:cover;border-radius:8px;border:1px solid var(--border);">
+          <input type="file" accept="image/*" class="invPhotoInput" style="display:none;">
+          <div style="display:flex; gap:4px; margin-top:4px;">
+            <button type="button" class="btn btn-ghost invPhotoBtn" title="${item.hasImage ? 'Replace photo' : 'Add a photo'}" style="font-size:11px;padding:4px 7px;">${item.hasImage ? '↻' : '📷'}</button>
+            ${item.hasImage ? `<button type="button" class="btn btn-ghost invPhotoRemoveBtn" title="Remove photo" style="font-size:11px;padding:4px 7px;">✕</button>` : ''}
+          </div>
         </div>
-        <div class="meta-row">
-          <span class="meta-label">Attribute</span>
-          <span class="attribute-label mono">${item.attribute ? escapeAttr(item.attribute) : '—'}</span>
-          <button class="meta-edit-btn attribute-edit-btn" type="button" title="Edit attribute (color, brand, model, etc.)">✎</button>
-          <input type="text" value="${escapeAttr(item.attribute||'')}" class="attributeEdit mono" placeholder="color / brand / model" style="display:none;">
-        </div>
-        <div class="meta-row">
-          <span class="meta-label">Serial #</span>
-          <span class="serial-label mono">${item.serialNumber ? escapeAttr(item.serialNumber) : '—'}</span>
-          <button class="meta-edit-btn serial-edit-btn" type="button" title="Edit serial number">✎</button>
-          <input type="text" value="${escapeAttr(item.serialNumber||'')}" class="serialEdit mono" placeholder="serial number" style="display:none;">
+        <div style="flex:1; min-width:0;">
+          <input type="text" value="${escapeAttr(item.name)}" class="nameEdit mono" style="width:100%;min-width:200px;">
+          ${item.onHold > 0 ? `<div style="margin-top:6px;"><span class="badge active" title="Claimed by a pending client source request or an outgoing transfer proposal - still fully in stock until that's actually accepted/fulfilled.">⏳ ${item.onHold} on hold</span></div>` : ''}
+          <div class="item-meta">
+            ${item.sku ? `<div class="meta-row"><span class="meta-label">SKU</span><span class="mono item-sku">${escapeAttr(item.sku)}</span></div>` : ''}
+            <div class="meta-row">
+              <span class="meta-label">Category</span>
+              <span class="cat-dot" style="background:${catCol.solid}"></span>
+              <span class="cat-label mono" style="color:${catCol.solid}">${item.category ? escapeAttr(item.category) : '—'}</span>
+              <button class="meta-edit-btn cat-edit-btn" type="button" title="Edit category">✎</button>
+              <input type="text" value="${escapeAttr(item.category||'')}" class="catEdit mono" placeholder="category" style="display:none;">
+            </div>
+            <div class="meta-row">
+              <span class="meta-label">Attribute</span>
+              <span class="attribute-label mono">${item.attribute ? escapeAttr(item.attribute) : '—'}</span>
+              <button class="meta-edit-btn attribute-edit-btn" type="button" title="Edit attribute (color, brand, model, etc.)">✎</button>
+              <input type="text" value="${escapeAttr(item.attribute||'')}" class="attributeEdit mono" placeholder="color / brand / model" style="display:none;">
+            </div>
+            <div class="meta-row">
+              <span class="meta-label">Serial #</span>
+              <span class="serial-label mono">${item.serialNumber ? escapeAttr(item.serialNumber) : '—'}</span>
+              <button class="meta-edit-btn serial-edit-btn" type="button" title="Edit serial number">✎</button>
+              <input type="text" value="${escapeAttr(item.serialNumber||'')}" class="serialEdit mono" placeholder="serial number" style="display:none;">
+            </div>
+          </div>
         </div>
       </div>
     </td>
@@ -5144,6 +5259,37 @@ function buildInvRow(item){
     <td><button class="del-btn">delete</button></td>
   `;
   tr.querySelector('.qrLabelBtn').onclick = ()=> printItemQR(item);
+
+  // Same compress-on-select flow as Add Item (see compressImageFile) - the
+  // file input is triggered by the visible button rather than shown
+  // directly, since a raw <input type="file"> can't be styled to match
+  // every other icon-button in this row.
+  const photoInput = tr.querySelector('.invPhotoInput');
+  tr.querySelector('.invPhotoBtn').onclick = ()=> photoInput.click();
+  photoInput.addEventListener('change', async (e)=>{
+    const file = e.target.files[0];
+    if(!file) return;
+    try{
+      const dataUrl = await compressImageFile(file);
+      inventory = await uploadItemImage(currentLab.id, item.id, dataUrl);
+      renderInvTable();
+      showToast('Photo updated');
+    }catch(err){
+      showToast(err.message || 'Something went wrong uploading that photo');
+    }
+  });
+  const removeBtn = tr.querySelector('.invPhotoRemoveBtn');
+  if(removeBtn){
+    removeBtn.onclick = async ()=>{
+      try{
+        inventory = await deleteItemImage(currentLab.id, item.id);
+        renderInvTable();
+        showToast('Photo removed');
+      }catch(err){
+        handleAdminApiError(err, 'Something went wrong removing that photo');
+      }
+    };
+  }
 
   async function saveField(field, value, successMsg){
     try{
