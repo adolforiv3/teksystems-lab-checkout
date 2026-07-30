@@ -874,7 +874,10 @@
         <div class="admin-section" data-admin-section="companyInventory">
           <h2>Company Inventory (<span id="companyInvCount">0</span> items across <span id="companyInvLabCount">0</span> labs)<button class="btn btn-ghost" id="companyInvRefreshBtn" type="button" style="margin-left:auto;">↻ Refresh</button></h2>
           <div class="small-note" style="margin-bottom:12px;">Every item across every lab you can see, in one list. Read-only; use "Manage" to jump into a lab and make changes there.</div>
-          <button class="btn btn-ghost" id="backfillSkusBtn" type="button" style="display:none; margin-bottom:12px;">🏷 Assign SKUs to items missing one</button>
+          <div id="skuBackfillActions" style="display:none; gap:10px; margin-bottom:12px; flex-wrap:wrap;">
+            <button class="btn btn-ghost" id="backfillSkusBtn" type="button">🏷 Assign SKUs to items missing one</button>
+            <button class="btn btn-ghost" id="regenerateSkusBtn" type="button" title="Replaces every item's SKU, including ones already assigned under an older naming convention">🔄 Regenerate ALL SKUs to current format</button>
+          </div>
           <input type="text" id="companyInvSearch" class="mono" placeholder="search by item, category, or lab…" style="width:100%;max-width:320px;margin-bottom:12px;">
           <table id="companyInvTable">
             <colgroup>
@@ -3484,8 +3487,8 @@ function renderCompanyInventory(){
   // admin manages), same reasoning as the endpoint itself being
   // superadmin-only - a lab-admin has no business touching another lab's
   // items even just to stamp a SKU on them.
-  document.getElementById('backfillSkusBtn').style.display =
-    adminUser && adminUser.role === 'superadmin' ? 'inline-flex' : 'none';
+  document.getElementById('skuBackfillActions').style.display =
+    adminUser && adminUser.role === 'superadmin' ? 'flex' : 'none';
 
   // See looseSearchMatch above - same multi-word/synonym/typo-tolerant
   // engine as every other item search box, plus the lab name since this
@@ -3524,13 +3527,16 @@ document.getElementById('companyInvRefreshBtn').onclick = async ()=>{
   renderCompanyInventory();
   showToast('Company inventory refreshed');
 };
-document.getElementById('backfillSkusBtn').onclick = async ()=>{
-  const btn = document.getElementById('backfillSkusBtn');
-  btn.disabled = true;
+// Shared runner for both SKU actions below - only the query string, button,
+// and busy-label differ between "fill in what's missing" and "replace
+// everything," so the actual request/refresh/error-handling sequence has
+// no reason to be duplicated between them.
+async function runSkuBackfill(btn, url, busyLabel){
   const original = btn.textContent;
-  btn.textContent = 'Assigning…';
+  btn.disabled = true;
+  btn.textContent = busyLabel;
   try{
-    const result = await apiWrite('/.netlify/functions/inventory?backfillSkus=1', 'POST', {}, true);
+    const result = await apiWrite(url, 'POST', {}, true);
     showToast(result.assigned > 0 ? `Assigned ${result.assigned} SKU${result.assigned===1?'':'s'} across ${result.labs} lab${result.labs===1?'':'s'}` : 'Every item already has a SKU');
     companyInventory = await fetchCompanyInventorySafe();
     renderCompanyInventory();
@@ -3540,6 +3546,22 @@ document.getElementById('backfillSkusBtn').onclick = async ()=>{
     btn.disabled = false;
     btn.textContent = original;
   }
+}
+document.getElementById('backfillSkusBtn').onclick = ()=>{
+  runSkuBackfill(document.getElementById('backfillSkusBtn'), '/.netlify/functions/inventory?backfillSkus=1', 'Assigning…');
+};
+document.getElementById('regenerateSkusBtn').onclick = async ()=>{
+  // This is the one SKU action that overwrites codes that may already be
+  // printed on physical labels around the lab (see the backend comment on
+  // `mode=all`) - confirm before it runs rather than treating it like the
+  // routine "fill in what's missing" pass above.
+  const ok = await showModal({
+    title: 'Regenerate every SKU?',
+    msg: "This replaces EVERY item's SKU across every lab with a fresh one in the current category-prefixed format - including items that already have a SKU under an older naming convention. Any code already printed on a physical label will no longer match. This can't be undone.",
+    okText: 'Regenerate All',
+  });
+  if(!ok) return;
+  runSkuBackfill(document.getElementById('regenerateSkusBtn'), '/.netlify/functions/inventory?backfillSkus=1&mode=all', 'Regenerating…');
 };
 
 /* ---------- ADMIN: account management (superadmin only) ---------- */

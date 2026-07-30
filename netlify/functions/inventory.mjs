@@ -133,14 +133,24 @@ export default withErrorBoundary(async (req) => {
   // BOOK's counter, not 40. Writes each lab's inventory back in a single
   // pass so this stays safe to run again later without re-numbering
   // anything that already has a SKU.
+  //
+  // `mode=all` is the one exception to that "never touches an existing
+  // SKU" rule: it treats every item as needing a fresh one, even if it
+  // already carries a SKU from an earlier naming convention (e.g. the flat
+  // INV-000123 scheme this app used before SKUs were category-prefixed).
+  // Deliberately a separate, explicit opt-in rather than the default -
+  // this permanently retires whatever codes might already be printed on
+  // physical labels, so it should only ever run because an admin asked for
+  // it, not as a side effect of the routine "fill in what's missing" pass.
   if (method === "POST" && url.searchParams.get("backfillSkus") === "1") {
     if (!isSuperadmin(admin)) return json({ error: admin ? "superadmin only" : "unauthorized" }, admin ? 403 : 401);
+    const regenerateAll = url.searchParams.get("mode") === "all";
     const labs = await loadLabsForRead(labRegistryStore());
     const perLab = await Promise.all(
       labs.map(async (lab) => {
         const labInventoryStore = labStore(lab.id);
         const inv = (await labInventoryStore.get("inventory", { type: "json" })) || [];
-        const missing = inv.filter((i) => !i.sku);
+        const missing = regenerateAll ? inv : inv.filter((i) => !i.sku);
         return { lab, labInventoryStore, missing };
       })
     );
