@@ -6,6 +6,7 @@ import { availableQty, checkLowStockAndNotify } from "./lib/lowstock.mjs";
 import { computePendingHolds, computePendingRequestHolds } from "./lib/holds.mjs";
 import { sendEmail } from "./lib/email.mjs";
 import { json, withErrorBoundary } from "./lib/http.mjs";
+import { nextSku } from "./lib/sku.mjs";
 
 class ApiError extends Error {
   constructor(message, status) {
@@ -447,10 +448,20 @@ export default withErrorBoundary(async (req) => {
               if (existing) {
                 inv = inv.map((i) => (i.id === existing.id ? { ...i, qty: i.qty + rm.qty } : i));
               } else {
+                // A brand-new record needs a SKU exactly like one created
+                // through inventory.mjs's own POST does - this is the same
+                // "new item enters this lab's inventory" event from the
+                // destination's point of view, just triggered by an
+                // accepted transfer instead of Add Item. Missing this was
+                // the actual bug behind a transferred item landing with no
+                // SKU at all: the merge-into-existing branch above was
+                // always fine (it keeps whatever SKU the existing record
+                // already had), but this create branch had nothing to keep.
                 inv = [
                   ...inv,
                   {
                     id: crypto.randomUUID(),
+                    sku: await nextSku(rm.category),
                     name: rm.name,
                     category: rm.category,
                     qty: rm.qty,
