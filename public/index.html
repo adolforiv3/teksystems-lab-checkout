@@ -773,7 +773,7 @@
       <div class="field"><label>Full name</label><input type="text" id="coName" placeholder="Jane Rivera"></div>
       <div class="field"><label>Email</label><input type="email" id="coEmail" placeholder="jane@lab.org"></div>
       <div class="indef-row">
-        <input type="checkbox" id="coIndef"> <label for="coIndef">Indefinite / consumable — no return needed</label>
+        <input type="checkbox" id="coIndef"> <label for="coIndef" title="This permanently reduces the item's on-hand quantity - it's treated as gone for good, not just checked out.">Indefinite / consumable — no return needed</label>
       </div>
       <div class="field" id="returnDateField"><label>Return by</label><input type="date" id="coReturn"></div>
       <button class="btn btn-teal btn-full" id="submitCheckout">Confirm Checkout</button>
@@ -923,7 +923,7 @@
           <div class="field"><label>Email</label><input type="email" id="assignEmail" placeholder="jane@lab.org"></div>
           <div class="field"><label>Checked out on</label><input type="date" id="assignDate"></div>
           <div class="indef-row">
-            <input type="checkbox" id="assignIndef"> <label for="assignIndef">Indefinite / consumable — no return needed</label>
+            <input type="checkbox" id="assignIndef"> <label for="assignIndef" title="This permanently reduces the item's on-hand quantity - it's treated as gone for good, not just checked out.">Indefinite / consumable — no return needed</label>
           </div>
           <div class="field" id="assignReturnField"><label>Return by</label><input type="date" id="assignReturn"></div>
 
@@ -2067,7 +2067,13 @@ function reindexCheckouts(){
   checkedOutIndex = new Map();
   for(const c of checkouts){
     for(const it of (c.items||[])){
-      if(it.returned) continue;
+      // `consumed` (set server-side whenever a checkout is indefinite - see
+      // checkouts.mjs's POST handler) means this qty was already
+      // permanently deducted from the item's own qty at checkout time, so
+      // counting it here too would double-subtract the same units from
+      // availability - same reasoning as excluding an already-`returned`
+      // item.
+      if(it.returned || it.consumed) continue;
       checkedOutIndex.set(it.itemId, (checkedOutIndex.get(it.itemId)||0) + it.qty);
     }
   }
@@ -2664,7 +2670,7 @@ async function openReturnFlow(email){
   checkouts = fresh;
 
   const mine = fresh.filter(c =>
-    (c.email||'').toLowerCase() === email.toLowerCase() && c.items.some(it=>!it.returned)
+    (c.email||'').toLowerCase() === email.toLowerCase() && c.items.some(it=>!it.returned && !it.consumed)
   );
   // Anything of theirs that's already marked returned but has no return
   // date on record - almost always a checkout that predates per-item
@@ -2693,9 +2699,9 @@ async function openReturnFlow(email){
     const card = document.createElement('div');
     card.className = 'return-checkout-card';
     const itemsHtml = c.items.map(it => `
-      <label class="return-item-row ${it.returned?'already-returned':''}">
-        <input type="checkbox" class="return-item-cb" data-item-id="${escapeAttr(it.itemId)}" ${it.returned?'checked disabled':'checked'}>
-        ${escapeAttr(it.name)} × ${it.qty} ${it.returned?'(already returned)':''}
+      <label class="return-item-row ${it.returned||it.consumed?'already-returned':''}">
+        <input type="checkbox" class="return-item-cb" data-item-id="${escapeAttr(it.itemId)}" ${it.returned||it.consumed?'disabled':'checked'}>
+        ${escapeAttr(it.name)} × ${it.qty} ${it.returned?'(already returned)':it.consumed?'(indefinite — not returnable here)':''}
       </label>
     `).join('');
     card.innerHTML = `
@@ -5878,6 +5884,19 @@ function buildTxnItemLine(c, it){
     const info = document.createElement('span');
     info.className = 'txn-item-info';
     info.innerHTML = `<span class="badge missing" style="margin-right:6px;">missing</span>${escapeAttr(it.name)} ×${it.qty}${kitTag}`;
+    line.appendChild(info);
+    return line;
+  }
+  if(it.consumed){
+    // Already permanently deducted from this item's on-hand qty at
+    // checkout time (see checkouts.mjs's POST handler) - no "report
+    // missing" here, since write-off's own qty deduction (see
+    // resolveMissing in checkouts.mjs) would otherwise double-subtract
+    // the same units a second time.
+    const info = document.createElement('span');
+    info.className = 'txn-item-info';
+    info.style.color = 'var(--ink-soft)';
+    info.innerHTML = `${escapeAttr(it.name)} ×${it.qty}${kitTag} <span style="font-size:10px;">(indefinite — already removed from stock)</span>`;
     line.appendChild(info);
     return line;
   }

@@ -140,6 +140,17 @@ export default withErrorBoundary(async (req) => {
       name: it.name,
       qty: it.qty,
       returned: false,
+      // A checked-out item nobody expects back should stop counting
+      // against this lab's on-hand qty the moment it's checked out,
+      // instead of sitting in "checked out, might come back" limbo
+      // forever - see the inventory write right after this record is
+      // saved. `consumed`, not `returned`: the checkout log still reads
+      // exactly like any other indefinite checkout (who has it, since
+      // when), it's just excluded from checkedOutQty/availableQty
+      // everywhere both are computed (see lib/lowstock.mjs), the same way
+      // an already-returned item already is - and unlike `returned`, it
+      // doesn't claim anyone actually gave it back.
+      ...(body.indefinite ? { consumed: true } : {}),
       ...(typeof it.kitId === "string" && it.kitId ? { kitId: it.kitId, kitName: it.kitName || "" } : {}),
     }));
     const actor = isAdminForLab && requester ? requester.username || requester.id : undefined;
@@ -198,6 +209,40 @@ export default withErrorBoundary(async (req) => {
       })
     );
     if (errorResponse) return errorResponse;
+
+    // An indefinite checkout is never coming back by design (see the
+    // `consumed` flag set on each item above) - so the qty leaves this
+    // lab's on-hand count the moment it's checked out, the same
+    // "permanently reduce stock" write the write-off flow already does for
+    // a missing item (see resolveMissing below), just triggered here
+    // instead of after the fact. Required, not best-effort: a silent
+    // failure here would leave the lab's counted stock overstating what's
+    // really on the shelf, so a write conflict surfaces as a real error
+    // the caller sees, rather than being swallowed the way purely
+    // housekeeping steps (cart-hold cleanup, low-stock email) are below.
+    if (record.indefinite) {
+      try {
+        await updateJSON(store, "inventory", async (invCurrent) => {
+          const inv = invCurrent || [];
+          return inv.map((i) => {
+            const line = record.items.find((it) => it.itemId === i.id);
+            return line ? { ...i, qty: Math.max(0, i.qty - line.qty) } : i;
+          });
+        });
+      } catch (e) {
+        if (e instanceof ConcurrentWriteError) {
+          return json(
+            {
+              ...record,
+              warning:
+                "Checked out, but too much contention updating on-hand quantity - please retry adjusting the item's quantity manually",
+            },
+            201
+          );
+        }
+        throw e;
+      }
+    }
 
     // The cart these units came from just turned into a real checkout - its
     // cart-hold reservation would otherwise keep counting against everyone
@@ -414,12 +459,18 @@ export default withErrorBoundary(async (req) => {
           const nowIso = new Date().toISOString();
           const justReported = [];
           const updatedItems = record.items.map((it) => {
-            if ((itemIds && !itemIds.includes(it.itemId)) || it.returned || it.missing) return it;
+            // `consumed` (see checkouts.mjs's POST handler) already
+            // permanently deducted this qty from the item's on-hand count -
+            // reporting it missing and later writing it off (see
+            // resolveMissing below) would deduct the same units a second
+            // time, so it's excluded here the same way an already-`missing`
+            // or `returned` item is.
+            if ((itemIds && !itemIds.includes(it.itemId)) || it.returned || it.missing || it.consumed) return it;
             justReported.push({ itemId: it.itemId, name: it.name, qty: it.qty });
             return { ...it, missing: true, missingAt: nowIso, missingNote: note };
           });
           if (justReported.length === 0) {
-            throw new ApiError("nothing here can be reported missing - it's already returned or already flagged", 400);
+            throw new ApiError("nothing here can be reported missing - it's already returned, already flagged, or an indefinite checkout already removed from stock", 400);
           }
           const next = [...list];
           next[idx] = {

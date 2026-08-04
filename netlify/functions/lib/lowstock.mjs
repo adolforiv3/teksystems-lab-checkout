@@ -8,10 +8,16 @@ import { updateJSON } from "./occ.mjs";
 // checking N items this way costs O(N x total checked-out line items). For
 // that case use buildCheckedOutIndex() once and read from the Map instead -
 // see checkLowStockAndNotify() below.
+// `consumed` marks a line item whose qty was already permanently deducted
+// from the item's on-hand qty at checkout time - see checkouts.mjs's POST
+// handler, which sets this whenever a checkout is indefinite. Excluded
+// here for the same reason an already-`returned` item is: counting it
+// against `checkedOut` on top of the qty already having been reduced would
+// double-subtract the same units.
 export function availableQty(item, checkouts) {
   const checkedOut = checkouts.reduce((sum, c) => {
     const forThisItem = (c.items || [])
-      .filter((it) => it.itemId === item.id && !it.returned)
+      .filter((it) => it.itemId === item.id && !it.returned && !it.consumed)
       .reduce((s, it) => s + it.qty, 0);
     return sum + forThisItem;
   }, 0);
@@ -25,7 +31,7 @@ export function buildCheckedOutIndex(checkouts) {
   const index = new Map();
   for (const c of checkouts) {
     for (const it of c.items || []) {
-      if (it.returned) continue;
+      if (it.returned || it.consumed) continue;
       index.set(it.itemId, (index.get(it.itemId) || 0) + it.qty);
     }
   }
