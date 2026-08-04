@@ -344,6 +344,53 @@ export default withErrorBoundary(async (req) => {
       return json({ error: requester ? "you don't have access to this lab" : "unauthorized" }, requester ? 403 : 401);
     }
 
+    if (action === "updatePerson") {
+      // { checkoutIds, name?, email? } - fixes a misspelled name/typo'd
+      // email across every checkout that person made, not just one. The Log
+      // groups checkouts by person (see personKey/groupCheckoutsByPerson in
+      // index.html) purely by matching name/email text on each individual
+      // checkout record - there's no separate "person" entity anywhere in
+      // storage - so a correction has to be applied to every record in that
+      // group at once or the group would silently split into two (the
+      // fixed one(s) and the still-misspelled rest). `checkoutIds` comes
+      // straight from the already-expanded group in the UI rather than
+      // being re-derived server-side from whatever old name/email is
+      // passed, since that's exactly what's being corrected and so can't
+      // double as the lookup key.
+      const checkoutIds = Array.isArray(body.checkoutIds) ? body.checkoutIds : [];
+      if (checkoutIds.length === 0) return json({ error: "checkoutIds required" }, 400);
+      const hasName = typeof body.name === "string";
+      const hasEmail = typeof body.email === "string";
+      const name = hasName ? body.name.trim() : undefined;
+      const email = hasEmail ? body.email.trim() : undefined;
+      if (hasName && !name) return json({ error: "name cannot be empty" }, 400);
+      if (!hasName && !hasEmail) return json({ error: "name or email required" }, 400);
+      const actor = requester ? requester.username || requester.id : "unknown";
+
+      const { value, errorResponse } = await runMutation(() =>
+        updateJSON(store, "checkouts", async (current) => {
+          const list = current || [];
+          const idSet = new Set(checkoutIds);
+          const nowIso = new Date().toISOString();
+          let touched = 0;
+          const next = list.map((c) => {
+            if (!idSet.has(c.id)) return c;
+            touched++;
+            return {
+              ...c,
+              ...(hasName ? { name } : {}),
+              ...(hasEmail ? { email } : {}),
+              history: [...(c.history || []), { at: nowIso, action: "person-updated", by: actor }],
+            };
+          });
+          if (touched === 0) throw new ApiError("none of those checkouts were found", 404);
+          return next;
+        })
+      );
+      if (errorResponse) return errorResponse;
+      return json(value);
+    }
+
     if (action === "reportMissing") {
       // { id, itemIds?, note? } - itemIds omitted means every not-yet-
       // returned, not-already-missing item on this checkout (same "omit

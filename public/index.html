@@ -5783,10 +5783,61 @@ function togglePersonDetail(personRow, g){
   markerRow.className = 'person-detail-marker';
   const markerTd = document.createElement('td');
   markerTd.colSpan = 3;
-  markerTd.innerHTML = `<div class="person-detail-label">Checkouts (${g.checkouts.length})</div>`;
+  // A "person" here is nothing but a name/email match across whichever
+  // checkouts share it (see personKey/groupCheckoutsByPerson) - there's no
+  // separate contact record to edit, so fixing a typo means rewriting that
+  // name/email on every checkout in the group at once (see the
+  // updatePerson action in checkouts.mjs). Collapsed by default, same
+  // pencil-toggle pattern as attribute/serial number editing in Lab
+  // Inventory - this is looked at rarely and shouldn't compete with the
+  // "Checkouts (N)" label for attention.
+  markerTd.innerHTML = `
+    <div class="person-detail-label" style="display:flex; justify-content:space-between; align-items:center; gap:8px;">
+      <span>Checkouts (${g.checkouts.length})</span>
+      <button type="button" class="link-btn person-edit-btn">✎ Fix name/email</button>
+    </div>
+    <div class="person-edit-form" style="display:none; gap:8px; margin-top:8px; flex-wrap:wrap; align-items:center;">
+      <input type="text" class="mono person-edit-name" value="${escapeAttr(g.name||'')}" placeholder="Full name" style="flex:1; min-width:160px;">
+      <input type="email" class="mono person-edit-email" value="${escapeAttr(g.email||'')}" placeholder="Email" style="flex:1; min-width:200px;">
+      <button type="button" class="btn btn-teal person-edit-save">Save</button>
+      <button type="button" class="btn btn-ghost person-edit-cancel">Cancel</button>
+    </div>
+  `;
   markerRow.appendChild(markerTd);
   anchor.after(markerRow);
   anchor = markerRow;
+
+  const personEditForm = markerTd.querySelector('.person-edit-form');
+  markerTd.querySelector('.person-edit-btn').onclick = ()=>{
+    personEditForm.style.display = personEditForm.style.display === 'none' ? 'flex' : 'none';
+  };
+  markerTd.querySelector('.person-edit-cancel').onclick = ()=>{
+    personEditForm.style.display = 'none';
+    markerTd.querySelector('.person-edit-name').value = g.name || '';
+    markerTd.querySelector('.person-edit-email').value = g.email || '';
+  };
+  markerTd.querySelector('.person-edit-save').onclick = async ()=>{
+    const name = markerTd.querySelector('.person-edit-name').value.trim();
+    const email = markerTd.querySelector('.person-edit-email').value.trim();
+    if(!name){ showToast('Name cannot be empty'); return; }
+    const saveBtn = markerTd.querySelector('.person-edit-save');
+    saveBtn.disabled = true;
+    try{
+      checkouts = await apiWrite(checkoutsUrl(), 'PATCH', {action:'updatePerson', checkoutIds: g.checkouts.map(c=>c.id), name, email}, true);
+      reindexCheckouts();
+      // Same precedence as personKey() itself (email wins over name) - the
+      // group this person's row re-expands into after renderLog() rebuilds
+      // has to be looked up under whatever key they'll actually be grouped
+      // under now, not the pre-edit one.
+      expandedPersonKey = (email || name || '').trim().toLowerCase();
+      renderLog();
+      showToast('Contact details updated');
+    }catch(err){
+      handleAdminApiError(err, "Something went wrong updating this person's details");
+    }finally{
+      saveBtn.disabled = false;
+    }
+  };
 
   g.checkouts.forEach(c=>{
     const txnRow = buildTxnRow(c);
