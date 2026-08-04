@@ -238,9 +238,20 @@
   .cart-kit-header{
     padding:16px 0 4px; font-size:12px; font-weight:800; text-transform:uppercase;
     letter-spacing:.05em; color:var(--ink);
+    display:flex; align-items:center; justify-content:space-between; gap:8px;
   }
   .cart-kit-header:first-child{ padding-top:0; }
   .cart-kit-header-other{ font-weight:600; color:var(--ink-soft); }
+  .cart-kit-header .cart-kit-remove{ text-transform:none; letter-spacing:normal; font-weight:600; font-size:12px; }
+  /* A kit-grouped line's qty is fixed - see buildCartLine's `locked` param -
+     so it reads as plain text instead of the interactive stepper every
+     other cart line gets, and there's no per-item remove button at all
+     (only "remove kit" on the group header above removes these). */
+  .cart-qty-locked{ font-size:14px; color:var(--ink-soft); flex-shrink:0; }
+  .item-kitted-note{
+    font-size:12px; color:var(--ink-soft); background:var(--paper);
+    border-radius:var(--r-sm); padding:8px 10px; line-height:1.4;
+  }
   .cart-qty{ display:flex; align-items:center; gap:6px; flex-shrink:0; }
   .qty-btn{
     width:28px; height:28px; padding:0; border:1px solid var(--border); background:var(--card);
@@ -2203,6 +2214,7 @@ function renderChips(){
 function buildItemCard(item){
   const avail = availableQty(item);
   const reserved = reservedQty(item);
+  const kitOwners = kitsContainingItem(item.id);
   const card = document.createElement('div');
   card.className = 'item-card' + (avail===0 ? ' out':'');
   const col = categoryColor(item.category);
@@ -2219,16 +2231,21 @@ function buildItemCard(item){
       <span class="stock-num ${avail===0?'zero':''}">${avail} / ${item.qty}</span>
     </div>
     ${reserved > 0 ? `<div class="item-reserved" title="Already claimed by a pending request or transfer to another team - not available to take right now.">${reserved} reserved for another request</div>` : ''}
-    <div class="add-row">
-      <input type="number" class="qty-input mono" min="1" max="${avail}" value="${avail>0?1:0}" ${avail===0?'disabled':''}>
-      <button class="btn btn-teal" style="flex:1" ${avail===0?'disabled':''}>Add to cart</button>
-    </div>
+    ${kitOwners.length
+      ? `<div class="item-kitted-note">📦 Only available as part of ${kitOwners.map(k=>escapeAttr(k.name)).join(', ')} - use the kit's "Add Kit" button above.</div>`
+      : `<div class="add-row">
+          <input type="number" class="qty-input mono" min="1" max="${avail}" value="${avail>0?1:0}" ${avail===0?'disabled':''}>
+          <button class="btn btn-teal" style="flex:1" ${avail===0?'disabled':''}>Add to cart</button>
+        </div>`
+    }
   `;
-  const qtyInput = card.querySelector('.qty-input');
-  card.querySelector('button').onclick = ()=>{
-    const q = Math.min(avail, Math.max(1, parseInt(qtyInput.value)||1));
-    addToCart(item, q);
-  };
+  if(!kitOwners.length){
+    const qtyInput = card.querySelector('.qty-input');
+    card.querySelector('button').onclick = ()=>{
+      const q = Math.min(avail, Math.max(1, parseInt(qtyInput.value)||1));
+      addToCart(item, q);
+    };
+  }
   return card;
 }
 
@@ -2317,7 +2334,28 @@ function untagKitOrigin(line){
   delete line.kitName;
 }
 
+// Every kit that references this item, computed live against the
+// currently-loaded `kits` list rather than a stored flag on the item -
+// kit membership can change (an admin edits a kit's contents) and this
+// always has to reflect what's true right now, the same reasoning
+// addKitToCart already applies to availability itself.
+function kitsContainingItem(itemId){
+  return (kits || []).filter(k => (k.items||[]).some(ref => ref.itemId === itemId));
+}
+
 function addToCart(item, qty){
+  // An item that's part of any kit was bundled that way for a reason - it
+  // should only ever enter a cart as part of that kit (see addKitToCart),
+  // never as a standalone line someone could cherry-pick out from under
+  // the rest of the kit. This is the one place both the item-card "Add to
+  // cart" button and a direct QR scan of the item's own label ultimately
+  // funnel through, so gating it here (not just visually disabling the
+  // button) is what actually makes this hold regardless of entry point.
+  const kitOwners = kitsContainingItem(item.id);
+  if(kitOwners.length){
+    showToast(`"${item.name}" is only available as part of ${kitOwners.map(k=>k.name).join(', ')} — add the kit instead`);
+    return;
+  }
   const existing = cart.find(c=>c.itemId===item.id);
   const avail = availableQty(item);
   if(existing){
@@ -2459,7 +2497,14 @@ async function refreshAndReconcileCart(){
 // `cart` array (never a position within a group) - the qty stepper and
 // remove button both mutate `cart` directly by that index, so grouping the
 // *display* below must never change what idx means.
-function buildCartLine(c, idx, indented){
+// `locked` is true for a line still tagged with its originating kit (see
+// renderCart's grouping) - a kitted item can't be cherry-picked out of the
+// rest of the kit, so there's no per-line qty stepper or remove button at
+// all here, only the "remove kit" action on the group header above every
+// locked line, which takes the whole group at once. An unlocked line (no
+// kit origin, or already demoted - see untagKitOrigin) keeps the normal
+// interactive controls unchanged.
+function buildCartLine(c, idx, indented, locked){
   const item = inventory.find(i=>i.id===c.itemId);
   // Add this line's own qty back - the server's `available` already
   // excludes this cart's own hold on the item (see addToCart), so the
@@ -2476,21 +2521,26 @@ function buildCartLine(c, idx, indented){
   line.className = 'cart-line' + (indented ? ' cart-line-indented' : '');
   line.innerHTML = `
     <span class="cart-name">${escapeAttr(c.name)}</span>
-    <div class="cart-qty">
-      <button class="qty-btn minus" type="button" ${c.qty<=1?'disabled':''}>−</button>
-      <input type="number" class="cart-qty-input mono" min="1" max="${avail}" value="${c.qty}">
-      <button class="qty-btn plus" type="button" ${c.qty>=avail?'disabled':''}>+</button>
-    </div>
-    <button class="rm">✕</button>
+    ${locked
+      ? `<span class="cart-qty-locked mono">×${c.qty}</span>`
+      : `<div class="cart-qty">
+          <button class="qty-btn minus" type="button" ${c.qty<=1?'disabled':''}>−</button>
+          <input type="number" class="cart-qty-input mono" min="1" max="${avail}" value="${c.qty}">
+          <button class="qty-btn plus" type="button" ${c.qty>=avail?'disabled':''}>+</button>
+        </div>
+        <button class="rm">✕</button>`
+    }
     ${details ? `<div class="cart-line-detail mono">${escapeAttr(details)}</div>` : ''}
   `;
-  line.querySelector('.minus').onclick = ()=> updateCartQty(idx, -1);
-  line.querySelector('.plus').onclick = ()=> updateCartQty(idx, 1);
-  line.querySelector('.cart-qty-input').addEventListener('change', (e)=>{
-    const v = parseInt(e.target.value);
-    setCartQty(idx, isNaN(v) ? c.qty : v);
-  });
-  line.querySelector('.rm').onclick = ()=>{ cart.splice(idx,1); renderCart(); };
+  if(!locked){
+    line.querySelector('.minus').onclick = ()=> updateCartQty(idx, -1);
+    line.querySelector('.plus').onclick = ()=> updateCartQty(idx, 1);
+    line.querySelector('.cart-qty-input').addEventListener('change', (e)=>{
+      const v = parseInt(e.target.value);
+      setCartQty(idx, isNaN(v) ? c.qty : v);
+    });
+    line.querySelector('.rm').onclick = ()=>{ cart.splice(idx,1); renderCart(); };
+  }
   return line;
 }
 
@@ -2528,9 +2578,15 @@ function renderCart(){
   kitGroups.forEach(group=>{
     const header = document.createElement('div');
     header.className = 'cart-kit-header';
-    header.textContent = group.kitName;
+    header.innerHTML = `<span>${escapeAttr(group.kitName)}</span><button class="link-btn cart-kit-remove" type="button">remove kit</button>`;
+    header.querySelector('.cart-kit-remove').onclick = ()=>{
+      // Highest index first, so each splice doesn't shift the position of
+      // an index still queued for removal in this same group.
+      group.lines.map(l=>l.idx).sort((a,b)=>b-a).forEach(i=> cart.splice(i,1));
+      renderCart();
+    };
     wrap.appendChild(header);
-    group.lines.forEach(({c, idx})=> wrap.appendChild(buildCartLine(c, idx, true)));
+    group.lines.forEach(({c, idx})=> wrap.appendChild(buildCartLine(c, idx, true, true)));
   });
 
   if(ungrouped.length){
@@ -2540,7 +2596,7 @@ function renderCart(){
       header.textContent = 'Other Items';
       wrap.appendChild(header);
     }
-    ungrouped.forEach(({c, idx})=> wrap.appendChild(buildCartLine(c, idx, kitGroups.size > 0)));
+    ungrouped.forEach(({c, idx})=> wrap.appendChild(buildCartLine(c, idx, kitGroups.size > 0, false)));
   }
 }
 
@@ -2863,6 +2919,15 @@ function onScanSuccess(decodedText){
   const item = inventory.find(i=>i.id === id);
   if(!item){
     feedback.textContent = 'Unrecognized code — not a lab item QR.';
+    return;
+  }
+  // Same "kitted items only ever enter a cart through the kit" rule as the
+  // item grid (see addToCart) - checked here too, not just relied on via
+  // addToCart's own guard below, so the scan feedback says something
+  // specific instead of misreporting a no-op as a successful add.
+  const kitOwners = kitsContainingItem(item.id);
+  if(kitOwners.length){
+    feedback.textContent = `${item.name} is only available as part of ${kitOwners.map(k=>k.name).join(', ')} — scan the kit's own label instead.`;
     return;
   }
   const avail = availableQty(item);
