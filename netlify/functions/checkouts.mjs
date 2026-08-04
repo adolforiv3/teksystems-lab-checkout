@@ -1,6 +1,6 @@
-import { resolveAdmin, canAccessLab } from "./lib/auth.mjs";
-import { labStore, cartHoldsStore } from "./lib/stores.mjs";
-import { resolveLab } from "./lib/lab-registry.mjs";
+import { resolveAdmin, canAccessLab, isSuperadmin } from "./lib/auth.mjs";
+import { labStore, cartHoldsStore, labRegistryStore } from "./lib/stores.mjs";
+import { resolveLab, loadLabsForRead } from "./lib/lab-registry.mjs";
 import { updateJSON, ConcurrentWriteError } from "./lib/occ.mjs";
 import { sendEmail } from "./lib/email.mjs";
 import { checkLowStockAndNotify, availableQty } from "./lib/lowstock.mjs";
@@ -86,6 +86,68 @@ export default withErrorBoundary(async (req) => {
   const method = req.method;
 
   const requester = await resolveAdmin(req);
+
+  // One-time (or re-run-safe) migration: the "indefinite checkouts
+  // permanently reduce on-hand qty" behavior above only ever applies at
+  // checkout time - it has no way to reach back and fix a checkout that
+  // was already indefinite before this feature existed. This walks every
+  // lab in the company, finds every indefinite checkout item that isn't
+  // already `returned` or `consumed`, deducts its qty from that item's
+  // on-hand count exactly once, and flags it `consumed` the same as a new
+  // indefinite checkout gets flagged today - so re-running this later is
+  // always a no-op for anything it already touched. Company-wide and
+  // superadmin-only for the same reason backfillSkus in inventory.mjs is:
+  // it isn't scoped to one lab at all, and a lab-admin has no business
+  // permanently adjusting another lab's stock.
+  if (method === "POST" && url.searchParams.get("backfillIndefinite") === "1") {
+    if (!isSuperadmin(requester)) return json({ error: requester ? "superadmin only" : "unauthorized" }, requester ? 403 : 401);
+    const labs = await loadLabsForRead(labRegistryStore());
+    let totalAdjusted = 0;
+    let labsTouched = 0;
+    for (const lab of labs) {
+      const labInventoryStore = labStore(lab.id);
+      const existingCheckouts = (await labInventoryStore.get("checkouts", { type: "json" })) || [];
+      const pending = [];
+      for (const c of existingCheckouts) {
+        if (!c.indefinite) continue;
+        for (const it of c.items || []) {
+          if (!it.returned && !it.consumed) pending.push({ checkoutId: c.id, itemId: it.itemId, qty: it.qty });
+        }
+      }
+      if (pending.length === 0) continue;
+
+      const qtyByItemId = new Map();
+      for (const p of pending) qtyByItemId.set(p.itemId, (qtyByItemId.get(p.itemId) || 0) + p.qty);
+      const pendingByCheckout = new Map();
+      for (const p of pending) {
+        if (!pendingByCheckout.has(p.checkoutId)) pendingByCheckout.set(p.checkoutId, new Set());
+        pendingByCheckout.get(p.checkoutId).add(p.itemId);
+      }
+
+      await updateJSON(labInventoryStore, "checkouts", async (current) => {
+        const list = current || [];
+        const nowIso = new Date().toISOString();
+        return list.map((c) => {
+          const itemIdsToMark = pendingByCheckout.get(c.id);
+          if (!itemIdsToMark) return c;
+          return {
+            ...c,
+            items: c.items.map((it) => (itemIdsToMark.has(it.itemId) && !it.returned && !it.consumed ? { ...it, consumed: true } : it)),
+            history: [...(c.history || []), { at: nowIso, action: "indefinite-backfill", by: isSuperadmin(requester) ? requester.username || requester.id : "unknown" }],
+          };
+        });
+      });
+      await updateJSON(labInventoryStore, "inventory", async (current) => {
+        const inv = current || [];
+        return inv.map((i) => (qtyByItemId.has(i.id) ? { ...i, qty: Math.max(0, i.qty - qtyByItemId.get(i.id)) } : i));
+      });
+
+      totalAdjusted += pending.length;
+      labsTouched++;
+    }
+    return json({ adjusted: totalAdjusted, labs: labsTouched });
+  }
+
   // See inventory.mjs / lib/lab-registry.mjs - resolves either the lab's
   // unguessable access token, or (for an admin already scoped to it) the
   // raw internal id.

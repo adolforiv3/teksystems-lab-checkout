@@ -883,6 +883,7 @@
           <div id="skuBackfillActions" style="display:none; gap:10px; margin-bottom:12px; flex-wrap:wrap;">
             <button class="btn btn-ghost" id="backfillSkusBtn" type="button">🏷 Assign SKUs to items missing one</button>
             <button class="btn btn-ghost" id="regenerateSkusBtn" type="button" title="Replaces every item's SKU, including ones already assigned under an older naming convention">🔄 Regenerate ALL SKUs to current format</button>
+            <button class="btn btn-ghost" id="backfillIndefiniteBtn" type="button" title="Permanently deducts on-hand qty for any indefinite checkout made before this behavior existed">📦 Apply stock deduction to existing indefinite checkouts</button>
           </div>
           <input type="text" id="companyInvSearch" class="mono" placeholder="search by item, category, or lab…" style="width:100%;max-width:320px;margin-bottom:12px;">
           <table id="companyInvTable">
@@ -3629,6 +3630,34 @@ document.getElementById('regenerateSkusBtn').onclick = async ()=>{
   });
   if(!ok) return;
   runSkuBackfill(document.getElementById('regenerateSkusBtn'), '/.netlify/functions/inventory?backfillSkus=1&mode=all', 'Regenerating…');
+};
+
+document.getElementById('backfillIndefiniteBtn').onclick = async ()=>{
+  // Permanently reduces on-hand qty - the same "are you sure" bar as
+  // Regenerate ALL SKUs above, since unlike the routine "fill in what's
+  // missing" SKU backfill, this one actually changes stock numbers, not
+  // just labels.
+  const ok = await showModal({
+    title: 'Deduct stock for existing indefinite checkouts?',
+    msg: "Any indefinite/consumable checkout made before this feature existed never had its qty deducted from that item's on-hand count. This finds every one of those, across every lab, and permanently reduces the item's on-hand qty to match - the checkout log itself is untouched. Safe to re-run later (it skips anything already accounted for).",
+    okText: 'Deduct Stock',
+  });
+  if(!ok) return;
+  const btn = document.getElementById('backfillIndefiniteBtn');
+  const original = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = 'Adjusting…';
+  try{
+    const result = await apiWrite('/.netlify/functions/checkouts?backfillIndefinite=1', 'POST', {}, true);
+    showToast(result.adjusted > 0 ? `Adjusted ${result.adjusted} item line${result.adjusted===1?'':'s'} across ${result.labs} lab${result.labs===1?'':'s'}` : 'Nothing to adjust - every indefinite checkout already accounted for');
+    companyInventory = await fetchCompanyInventorySafe();
+    renderCompanyInventory();
+  }catch(err){
+    handleAdminApiError(err, 'Something went wrong adjusting stock for indefinite checkouts');
+  }finally{
+    btn.disabled = false;
+    btn.textContent = original;
+  }
 };
 
 /* ---------- ADMIN: account management (superadmin only) ---------- */
